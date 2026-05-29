@@ -1,0 +1,24 @@
+# Environments
+venv/
+env/
+.env
+
+# Build files
+build/
+dist/
+*.spec
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local App Data
+history.db
+metadata_cache.json
+covers_cache/

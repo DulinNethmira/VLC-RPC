@@ -1,0 +1,14 @@
+{
+    "client_id": "1465711556418474148",
+    "vlc_host": "localhost",
+    "vlc_port": 8080,
+    "vlc_password": "11Lega**11",
+    "update_interval": 2,
+    "large_image_key": "vlc",
+    "large_image_text": "VLC Media Player",
+    "small_image_key": "play",
+    "small_image_text": "Playing",
+    "small_image_paused_key": "pause",
+    "small_image_paused_text": "Paused",
+    "minimize_to_tray": true
+}
