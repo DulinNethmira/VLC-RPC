@@ -18,7 +18,7 @@ VLC RPC seamlessly connects your VLC Media Player to Discord. Show your friends 
 ## 🚀 Installation
 
 ### Option 1: Quick Installer (Recommended for Windows)
-1. Go to the [Releases Tab](https://github.com/YOUR_USERNAME/YOUR_REPO/releases).
+1. Go to the [Releases Tab](https://github.com/DulinNethmira/VLC-RPC/releases/tag/v1.0.0).
 2. Download `VLC RPC Setup.exe` from the latest release.
 3. Run the installer. It will automatically create a desktop shortcut and configure everything.
 
