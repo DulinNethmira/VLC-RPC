@@ -71,7 +71,6 @@ def clean_title(title):
             pass
 
     # Fallback to standard regex parsing if guessit fails or is not installed
-    title = os.path.splitext(title)[0]
     title = re.sub(r'\[[^\]]*\]', '', title)
     title = re.sub(r'\([^\)]*\)', '', title)
     
@@ -166,6 +165,7 @@ class RPCBackend:
             "local_image_path": None,
             "exit_flag": False
         }
+        self.force_update_flag = False
         self.window = None
         self.stop_event = threading.Event()
         self.current_watch_duration = 0
@@ -326,6 +326,10 @@ class RPCBackend:
                     self.state_data["is_music"] = is_music
                     self.state_data["cleaned_title"] = cleaned_title
                     track_key = f"{self.state_data['title']}:{self.state_data['artist']}"
+                    
+                    if self.force_update_flag:
+                        last_track_key = None
+                        self.force_update_flag = False
                     
                     if track_key != last_track_key:
                         if hasattr(self, 'last_watched_title_raw') and self.last_watched_title_raw != self.state_data['title']:
@@ -640,7 +644,8 @@ class WebApi:
             return {"success": False, "error": str(e)}
             
     def force_update(self):
-        pass # UI loop does this anyway
+        self.backend.force_update_flag = True
+        return {"success": True}
         
     def get_history(self):
         try:
@@ -698,7 +703,13 @@ def on_closing():
         return True # Proceed with close
 
 def setup_tray():
-    startup_path = os.path.join(os.environ['APPDATA'], 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'VLC_Discord_RP.bat')
+    old_startup_path = os.path.join(os.environ['APPDATA'], 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'VLC_Discord_RP.bat')
+    startup_path = os.path.join(os.environ['APPDATA'], 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'VLCRPC_Startup.bat')
+    
+    # Clean up legacy startup file
+    if os.path.exists(old_startup_path):
+        try: os.remove(old_startup_path)
+        except Exception: pass
     
     def is_startup_enabled(item):
         return os.path.exists(startup_path)
