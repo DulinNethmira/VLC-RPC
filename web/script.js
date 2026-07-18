@@ -46,9 +46,10 @@ window.updateState = function(state) {
 
         // Cover image
         const coverEl = document.getElementById('hero-cover');
-        const cover = document.getElementById('hero-cover-container');
         if (!state.metadata || !state.metadata.image_url) {
-            cover.style.backgroundImage = 'none';
+            coverEl.style.opacity = '0.3';
+        } else {
+            coverEl.style.opacity = '1';
         }
         
         if (state.metadata && state.metadata.dominant_color) {
@@ -80,9 +81,27 @@ window.updateState = function(state) {
             badge.textContent = 'Watching';
             badge.className = 'hero-badge';
         }
+        
+        // Quality & Audio badges
+        const qualityBadge = document.getElementById('quality-badge');
+        if (state.quality) {
+            qualityBadge.textContent = state.quality;
+            qualityBadge.style.display = 'inline-block';
+        } else {
+            qualityBadge.style.display = 'none';
+        }
+        
+        const audioBadge = document.getElementById('audio-badge');
+        if (state.audio_tracks > 1) {
+            audioBadge.textContent = state.audio_tracks + ' Audios';
+            audioBadge.style.display = 'inline-block';
+        } else {
+            audioBadge.style.display = 'none';
+        }
 
-        // Title & Subtitle
-        document.getElementById('hero-title').textContent = state.title || 'Unknown';
+        // Title & Subtitle — prefer cleaned_title ("One Piece") over raw title ("One Piece 1168.mp4")
+        const displayTitle = state.cleaned_title || state.title || 'Unknown';
+        document.getElementById('hero-title').textContent = displayTitle;
         document.getElementById('hero-subtitle').textContent = state.episode_str || (isMusic ? state.artist : '');
 
         // Progress
@@ -114,7 +133,12 @@ function saveConfig() {
         client_id: document.getElementById('client_id').value,
         vlc_host: document.getElementById('vlc_host').value,
         vlc_port: parseInt(document.getElementById('vlc_port').value) || 8080,
-        vlc_password: document.getElementById('vlc_password').value
+        vlc_password: document.getElementById('vlc_password').value,
+        anilist_client_id: document.getElementById('anilist_client_id').value,
+        anilist_client_secret: document.getElementById('anilist_client_secret').value,
+        discord_app_secret: document.getElementById('discord_app_secret').value,
+        discord_app_id: document.getElementById('discord_app_id').value,
+        auto_sync_threshold: parseInt(document.getElementById('auto_sync_threshold').value) || 90
     };
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.save_config(config).then(function(response) {
@@ -150,6 +174,11 @@ function switchTab(tabId) {
         startHistoryRefresh();
     } else {
         stopHistoryRefresh();
+    }
+    if (tabId.includes('anilogs')) {
+        startAniLogRefresh();
+    } else {
+        stopAniLogRefresh();
     }
 }
 
@@ -221,12 +250,86 @@ window.addEventListener('pywebviewready', function() {
         document.getElementById('vlc_host').value = config.vlc_host || 'localhost';
         document.getElementById('vlc_port').value = config.vlc_port || 8080;
         document.getElementById('vlc_password').value = config.vlc_password || '';
+        document.getElementById('anilist_client_id').value = config.anilist_client_id || '';
+        document.getElementById('anilist_client_secret').value = config.anilist_client_secret || '';
+        document.getElementById('discord_app_secret').value = config.discord_client_secret || config.discord_app_secret || '';
+        document.getElementById('discord_app_id').value = config.discord_app_id || config.discord_client_id || '';
+        document.getElementById('auto_sync_threshold').value = config.auto_sync_threshold || 90;
     });
     
+    document.getElementById('btn-anilist-login').addEventListener('click', (e) => {
+        e.preventDefault();
+        window.pywebview.api.auth_anilist();
+    });
+
     // Start polling state from backend safely
     setInterval(() => {
         window.pywebview.api.get_state().then(state => {
             if (state) window.updateState(state);
         }).catch(err => console.error("Error fetching state:", err));
-    }, 1000);
+        
+        // Also poll config to update AniList connect button
+        window.pywebview.api.get_config().then(config => {
+            const btn = document.getElementById('btn-anilist-login');
+            if (config && config.anilist_token) {
+                btn.style.background = 'rgba(34, 197, 94, 0.2)';
+                btn.style.borderColor = '#22c55e';
+                btn.innerHTML = '<i class="fas fa-check-circle" style="color: #22c55e;"></i> <span style="color: #22c55e;">AniList Connected</span>';
+            } else {
+                btn.style.background = '#2b2d42';
+                btn.style.borderColor = '#3b82f6';
+                btn.innerHTML = '<i class="fas fa-link"></i> <span>Connect AniList Account</span>';
+            }
+        }).catch(err => {});
+    }, 1500);
 });
+// ===== AniList Logs =====
+let aniLogInterval = null;
+let _lastAniLogCount = 0;
+
+function renderAniLogs(logs) {
+    const el = document.getElementById('anilog-list');
+    if (!el) return;
+    if (logs.length === 0) {
+        el.innerHTML = '<p style="color: #555; text-align: center; margin: 40px 0;">No AniList activity yet. Start playing an anime episode to see logs here.</p>';
+        return;
+    }
+    if (logs.length === _lastAniLogCount) return; // no change
+    _lastAniLogCount = logs.length;
+    el.innerHTML = [...logs].reverse().map(line => {
+        let color = '#c8d3f0';
+        if (line.includes('[Error]') || line.includes('[Crash]')) color = '#f87171';
+        else if (line.includes('[Trigger]') || line.includes('Updated!')) color = '#4ade80';
+        else if (line.includes('[Found]') || line.includes('[Global]')) color = '#60a5fa';
+        else if (line.includes('[Check]')) color = '#a78bfa';
+        else if (line.includes('[Skip]')) color = '#94a3b8';
+        return `<div style="color:${color}; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">${line}</div>`;
+    }).join('');
+}
+
+function loadAniLogs() {
+    if (!window.pywebview || !window.pywebview.api) return;
+    window.pywebview.api.get_anilist_logs().then(res => {
+        if (res && res.success) renderAniLogs(res.logs);
+    }).catch(() => {});
+}
+
+function startAniLogRefresh() {
+    loadAniLogs();
+    if (aniLogInterval) clearInterval(aniLogInterval);
+    aniLogInterval = setInterval(loadAniLogs, 2000);
+}
+
+function stopAniLogRefresh() {
+    if (aniLogInterval) { clearInterval(aniLogInterval); aniLogInterval = null; }
+}
+
+function clearAniLogs() {
+    _lastAniLogCount = 0;
+    if (window.pywebview && window.pywebview.api) {
+        // Also clear on backend by calling a no-op; we just reset frontend
+        window.pywebview.api.get_anilist_logs().then(() => {});
+    }
+    const el = document.getElementById('anilog-list');
+    if (el) el.innerHTML = '<p style="color:#555; text-align:center; margin:40px 0;">Logs cleared.</p>';
+}

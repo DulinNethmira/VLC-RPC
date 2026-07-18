@@ -7,6 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" type="image/png" href="icon.png">
 </head>
 <body>
     <div class="ambient-glow glow-orange"></div>
@@ -21,7 +22,7 @@
         <!-- Sidebar Navigation -->
         <nav class="sidebar">
             <div class="brand">
-                <img src="icon.ico" alt="Logo" class="brand-icon">
+                <img src="icon.png" alt="Logo" class="brand-icon">
                 <h2>RPC Engine</h2>
             </div>
             
@@ -34,6 +35,12 @@
                 </a>
                 <a href="#" class="nav-item" data-tab="tab-preferences">
                     <i class="fas fa-sliders-h"></i> Preferences
+                </a>
+                <a href="#" class="nav-item" data-tab="tab-integrations">
+                    <i class="fas fa-link"></i> Integrations
+                </a>
+                <a href="#" class="nav-item" data-tab="tab-anilogs">
+                    <i class="fas fa-scroll"></i> AniList Logs
                 </a>
             </div>
             
@@ -74,7 +81,11 @@
                         <div class="active-state" id="active-state" style="display: none;">
                             <img src="" alt="Cover" class="hero-cover" id="hero-cover">
                             <div class="hero-info">
-                                <span class="hero-badge" id="hero-badge">Watching</span>
+                                <div class="badges-row" style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center;">
+                                    <span class="hero-badge" id="hero-badge">Watching</span>
+                                    <span class="hero-badge" id="quality-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
+                                    <span class="hero-badge" id="audio-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
+                                </div>
                                 <h2 class="hero-title" id="hero-title">Video Title</h2>
                                 <p class="hero-subtitle" id="hero-subtitle">Season 1 Episode 1</p>
                                 
@@ -142,6 +153,79 @@
                             <input type="password" id="vlc_password" placeholder="Enter VLC password...">
                             <span class="hint">Required for the RPC to extract metadata from VLC.</span>
                         </div>
+                    </div>
+                </div>
+            </div>
+            <!-- Integrations Tab -->
+            <div id="tab-integrations" class="tab-content" style="display: none;">
+                <header class="page-header">
+                    <h1>Integrations</h1>
+                    <button class="action-btn primary" onclick="saveConfig()"><i class="fas fa-check"></i> Save Integrations</button>
+                </header>
+
+                <div class="settings-grid">
+                    <div class="glass-card">
+                        <h3><i class="fas fa-tv"></i> AniList Auto-Tracking</h3>
+                        <p class="hint" style="margin-bottom: 15px;">Automatically update your AniList episode progress when you finish watching.</p>
+                        
+                        <div class="input-group">
+                            <label>AniList Client ID</label>
+                            <input type="text" id="anilist_client_id" placeholder="Application ID...">
+                        </div>
+                        <div class="input-group" style="margin-top: 15px; margin-bottom: 15px;">
+                            <label>AniList Client Secret</label>
+                            <input type="password" id="anilist_client_secret" placeholder="Client Secret...">
+                            <span class="hint">Found in AniList Developer Settings. Requires "http://localhost:8899" as the Redirect URI.</span>
+                        </div>
+                        <div class="input-group" style="margin-bottom: 15px;">
+                            <button id="btn-anilist-login" class="action-btn primary" style="width: 100%; justify-content: center; background: #2b2d42; border-color: #3b82f6;">
+                                <i class="fas fa-link"></i> <span>Connect AniList Account</span>
+                            </button>
+                            <input type="hidden" id="anilist_token" value="">
+                        </div>
+                        <div class="input-group" style="margin-top: 15px;">
+                            <label>Auto-Sync Threshold (%)</label>
+                            <input type="number" id="auto_sync_threshold" value="90" min="50" max="100">
+                            <span class="hint">Percentage of the video that must be watched before syncing.</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3><i class="fab fa-discord"></i> Discord Widget Sync</h3>
+                        <p class="hint" style="margin-bottom: 15px;">Sync your AniList total stats directly to your Custom Discord Profile Widget.</p>
+                        
+                        <div class="input-group">
+                            <label>Discord Client ID</label>
+                            <input type="text" id="discord_app_id" placeholder="Application ID...">
+                            <span class="hint">The Application ID for your widget app.</span>
+                        </div>
+                        <div class="input-group" style="margin-top: 15px;">
+                            <label>Discord Client Secret</label>
+                            <input type="password" id="discord_app_secret" placeholder="Client Secret...">
+                            <span class="hint">Found in Discord Developer Portal -> OAuth2. (Required to get an auth token).</span>
+                        </div>
+                        
+                        <div style="display: flex; gap: 10px; margin-top: 15px;">
+                            <button class="action-btn primary" style="flex: 1; justify-content: center;" onclick="window.pywebview.api.auth_discord_widget()">
+                                <i class="fas fa-lock"></i> Link Discord
+                            </button>
+                            <button class="action-btn" style="flex: 1; justify-content: center; background: rgba(88, 101, 242, 0.2); border-color: #5865F2;" onclick="window.pywebview.api.sync_discord_widget()">
+                                <i class="fas fa-sync"></i> Force Sync
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AniList Logs Tab -->
+            <div id="tab-anilogs" class="tab-content" style="display: none;">
+                <header class="page-header">
+                    <h1>AniList Logs</h1>
+                    <button class="action-btn" onclick="clearAniLogs()"><i class="fas fa-trash"></i> Clear</button>
+                </header>
+                <div class="glass-card" style="padding: 0; overflow: hidden;">
+                    <div id="anilog-list" style="font-family: 'Courier New', monospace; font-size: 12px; color: #c8d3f0; padding: 16px; max-height: 440px; overflow-y: auto; display: flex; flex-direction: column-reverse;">
+                        <p style="color: #555; text-align: center; margin: 40px 0;">No AniList activity yet. Start playing an anime episode to see logs here.</p>
                     </div>
                 </div>
             </div>
