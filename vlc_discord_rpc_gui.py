@@ -41,17 +41,24 @@ DEFAULT_CONFIG = {
 }
 
 def clean_title(title):
-    # Try using guessit for intelligent media parsing
+    """Parse a raw filename into (display_title, episode_str).
+    Works for both anime/TV  (S01E04, Episode 4) and movies
+    (American.Sniper.2014.720p.BluRay…)."""
     if guessit:
         try:
             guessed = guessit.guessit(title)
             cleaned = guessed.get('title', title)
-            
             episode_str = ""
-            if guessed.get('type') == 'movie':
-                if guessed.get('year'):
-                    cleaned = f"{cleaned} ({guessed.get('year')})"
-            elif guessed.get('type') == 'episode':
+            media_type = guessed.get('type', '')
+
+            if media_type == 'movie':
+                year = guessed.get('year')
+                if year:
+                    cleaned = f"{cleaned} ({year})"
+                    episode_str = f"Movie ({year})"
+                else:
+                    episode_str = "Movie"
+            elif media_type == 'episode':
                 season = guessed.get('season')
                 episode = guessed.get('episode')
                 if season and episode:
@@ -61,20 +68,21 @@ def clean_title(title):
                 elif episode:
                     if isinstance(episode, list): episode = episode[0]
                     episode_str = f"Episode {episode}"
-            
-            # Simple title casing
+
+            # Title-case while preserving uppercase acronyms (e.g. "YIFY"->"Yify" is fine)
             if cleaned and isinstance(cleaned, str):
-                cleaned = ' '.join(word.capitalize() for word in str(cleaned).split())
-                
+                cleaned = ' '.join(w.capitalize() for w in str(cleaned).split())
+
             return str(cleaned), episode_str
         except Exception:
             pass
 
-    # Fallback to standard regex parsing if guessit fails or is not installed
+    # --- Regex fallback ---
     title = re.sub(r'\[[^\]]*\]', '', title)
     title = re.sub(r'\([^\)]*\)', '', title)
-    
+
     episode_str = ""
+    # TV season/episode
     se_match = re.search(r'\bS(\d+)\s*E(\d+)\b', title, re.IGNORECASE)
     if se_match:
         episode_str = f"Season {int(se_match.group(1))} Episode {int(se_match.group(2))}"
@@ -88,16 +96,22 @@ def clean_title(title):
         episode_str = f"Episode {int(dash_match.group(1))}"
         title = re.sub(r'-\s*\d+\b', '', title)
 
+    # Movie year detection (regex fallback)
+    year_match = re.search(r'\b(19|20)\d{2}\b', title)
+    if year_match and not episode_str:
+        episode_str = f"Movie ({year_match.group()})"
+
     words_to_remove = [
         r'\b1080p\b', r'\b720p\b', r'\b480p\b', r'\b2160p\b', r'\b4k\b',
         r'\bbluray\b', r'\bwebrip\b', r'\bweb-dl\b', r'\bdvdrip\b',
         r'\bx264\b', r'\bx265\b', r'\bh264\b', r'\bhevc\b',
         r'\bdual[- ]audio\b', r'\bmulti\b', r'\beng\b', r'\bsub\b', r'\bdub\b',
-        r'\byify\b', r'\bxvid\b'
+        r'\byify\b', r'\bxvid\b', r'\baac\b', r'\byts\b', r'\b\[yts\.mx\]\b',
+        r'\brepack\b', r'\bextended\b'
     ]
     for word in words_to_remove:
         title = re.sub(word, '', title, flags=re.IGNORECASE)
-        
+
     title = re.sub(r'[\s\.\-_]+', ' ', title).strip()
     return title, episode_str
 
@@ -166,13 +180,29 @@ class RPCBackend:
             "exit_flag": False
         }
         self.force_update_flag = False
+        self.scrobbled_episodes = set()
+        self.last_sync_time = 0
         self.window = None
         self.stop_event = threading.Event()
         self.current_watch_duration = 0
+        self.anilist_logs = []
         self.setup_database()
         self.metadata_cache = self.load_metadata_cache()
         self.worker_thread = threading.Thread(target=self.rpc_worker, daemon=True)
         self.worker_thread.start()
+
+    def anilist_log(self, msg):
+        """Append timestamped entry to in-app AniList log and Discord webhook."""
+        import datetime
+        entry = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
+        self.anilist_logs.append(entry)
+        if len(self.anilist_logs) > 200:
+            self.anilist_logs = self.anilist_logs[-200:]
+        try:
+            print(f"[AniList] {entry}".encode('utf-8', errors='replace').decode('utf-8'))
+        except Exception:
+            pass
+        self.send_webhook_log(msg)
 
     def setup_database(self):
         if getattr(sys, 'frozen', False):
@@ -206,6 +236,436 @@ class RPCBackend:
             conn.close()
         except Exception:
             pass
+
+    def send_webhook_log(self, message):
+        webhook_url = "https://discord.com/api/webhooks/1524076131035119740/EmuI1-4_-ciqZ-GjvV2NdXY-sVYYsNqVFe9fkdu57YkVV0xe5qlY3VfPk63hci2wlv8w"
+        try:
+            payload = {"content": f"**[VLC RPC Tracker]** {message}"}
+            response = requests.post(webhook_url, json=payload, timeout=5)
+            if response.status_code not in (204, 200, 201):
+                print(f"[Webhook] Failed with status {response.status_code}: {response.text[:200]}")
+        except Exception as e:
+            print(f"[Webhook] Exception: {e}")
+            # swallow to avoid breaking main flow
+            pass
+
+    def sync_anilist(self, title, episode_num):
+        token = self.config.get("anilist_token")
+        if not token:
+            self.anilist_log("[Error] No AniList token — connect via Integrations tab.")
+            return False
+
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+
+        def _gql(payload, timeout=10):
+            """POST GraphQL, handle 401 by clearing the bad token."""
+            r = requests.post('https://graphql.anilist.co', json=payload,
+                              headers=headers, timeout=timeout)
+            if r.status_code == 401:
+                self.config["anilist_token"] = ""
+                save_config(self.config)
+                self.anilist_log("[Error] Token expired/invalid. Cleared — reconnect via Integrations.")
+                raise PermissionError("AniList 401")
+            return r.json()
+
+        try:
+            # ── Step 1a: Viewer ID ─────────────────────────────────────────
+            viewer_data = _gql({"query": "query { Viewer { id } }"})
+            viewer_id = (viewer_data.get("data") or {}).get("Viewer", {}).get("id")
+
+            # ── Step 1b: User active-list lookup (solves season ambiguity) ─
+            media_id = None
+            total_episodes = None
+            search_lower = re.sub(r'\s*\(\d{4}\)', '', title).strip().lower()
+
+            if viewer_id:
+                list_q = """
+                query ($userId: Int) {
+                  MediaListCollection(userId: $userId, type: ANIME,
+                                      status_in: [CURRENT, PLANNING]) {
+                    lists { entries {
+                      media { id episodes title { romaji english } synonyms }
+                    }}
+                  }
+                }"""
+                lists_data = _gql({"query": list_q, "variables": {"userId": viewer_id}})
+
+                def _match(media):
+                    cands = []
+                    t = media.get("title") or {}
+                    if t.get("english"): cands.append(t["english"].lower())
+                    if t.get("romaji"):  cands.append(t["romaji"].lower())
+                    for syn in (media.get("synonyms") or []):
+                        cands.append(syn.lower())
+                    return any(search_lower in c or c in search_lower for c in cands)
+
+                mlc = (lists_data.get("data") or {}).get("MediaListCollection") or {}
+                for lst in mlc.get("lists", []):
+                    for entry in lst.get("entries", []):
+                        m = entry.get("media", {})
+                        if _match(m):
+                            media_id = m["id"]
+                            total_episodes = m.get("episodes")
+                            self.anilist_log(f"[Found] '{title}' in your list -> ID {media_id}")
+                            break
+                    if media_id:
+                        break
+
+            # ── Step 1c: Page search fallback with structural check ─────────
+            if not media_id:
+                page_q = """
+                query ($search: String, $type: MediaType) {
+                  Page(perPage: 5) {
+                    media(search: $search, type: $type) {
+                      id episodes format
+                      title { romaji english native }
+                    }
+                  }
+                }"""
+                page_data = _gql({"query": page_q,
+                                   "variables": {"search": search_lower, "type": "ANIME"}})
+                candidates = ((page_data.get("data") or {}).get("Page") or {}).get("media", [])
+                for m in candidates:
+                    fmt = (m.get("format") or "").upper()
+                    eps = m.get("episodes")
+                    if fmt in ("TV", "TV_SHORT", "ONA", "OVA", "SPECIAL") or \
+                       (eps and eps >= episode_num):
+                        media_id = m["id"]
+                        total_episodes = eps
+                        t = m.get("title", {})
+                        found = t.get("english") or t.get("romaji") or title
+                        self.anilist_log(f"[Global] Matched '{found}' -> ID {media_id}")
+                        break
+
+            if not media_id:
+                self.anilist_log(f"[Error] Could not resolve '{title}' to any AniList ID.")
+                return False
+
+            # ── Step 2: Status logic ────────────────────────────────────────
+            new_status = "COMPLETED" \
+                if (total_episodes and episode_num >= total_episodes) \
+                else "CURRENT"
+
+            # ── Step 3: SaveMediaListEntry mutation ────────────────────────
+            mutation = """
+            mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus) {
+              SaveMediaListEntry(mediaId: $mediaId, progress: $progress,
+                                 status: $status) {
+                id progress status
+              }
+            }"""
+            result = _gql({"query": mutation,
+                            "variables": {"mediaId": media_id,
+                                          "progress": episode_num,
+                                          "status": new_status}})
+            entry = ((result.get("data") or {}).get("SaveMediaListEntry") or {})
+            if entry.get("id"):
+                emoji = "[OK]" if new_status == "CURRENT" else "[DONE]"
+                self.anilist_log(f"{emoji} Updated! '{title}' E{entry['progress']} -> {entry['status']}")
+                return True
+            else:
+                errors = result.get("errors", [])
+                err = errors[0].get("message", "Unknown") if errors else str(result)[:120]
+                self.anilist_log(f"[Error] Mutation failed: {err}")
+                return False
+
+        except PermissionError:
+            return False
+        except Exception as e:
+            self.anilist_log(f"[Crash] sync_anilist error: {e}")
+            return False
+
+    def force_sync_widget(self):
+        token = self.config.get("anilist_token")
+        client_id = self.config.get("discord_app_id")
+        access_token = self.config.get("discord_access_token")
+        if not token or not client_id or not access_token:
+            self.send_webhook_log("❌ **Discord Widget Skipped:** Missing token, app ID, or access token in settings.")
+            return
+        try:
+            headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json', 'Accept': 'application/json'}
+            query = '{ Viewer { statistics { anime { episodesWatched minutesWatched meanScore statuses { status count } } } } }'
+            r = requests.post('https://graphql.anilist.co', json={'query': query}, headers=headers, timeout=10)
+            
+            if r.status_code != 200:
+                self.send_webhook_log(f"❌ **Discord Widget Failed:** AniList stats fetch returned HTTP {r.status_code}")
+                return
+            
+            body = r.json()
+            data = body.get('data') or {}
+            viewer = data.get('Viewer') or {}
+            statistics = viewer.get('statistics') or {}
+            stats = statistics.get('anime') or {}
+            
+            if not stats:
+                self.send_webhook_log(f"❌ **Discord Widget Failed:** AniList returned empty stats. Raw response: `{r.text[:150]}`")
+                return
+            
+            completed = watching = planned = 0
+            for s in (stats.get('statuses') or []):
+                status = s.get('status', '')
+                count = s.get('count', 0)
+                if status == 'COMPLETED': completed = count
+                elif status == 'CURRENT': watching = count
+                elif status == 'PLANNING': planned = count
+                
+            episodes = stats.get('episodesWatched', 0) or 0
+            minutes = stats.get('minutesWatched', 0) or 0
+            mean = stats.get('meanScore') or 0
+
+            payload = {
+                "platform_name": "AniList Auto-Tracker",
+                "metadata": {
+                    "completed": completed,
+                    "watching": watching,
+                    "episodes": episodes,
+                    "hours": minutes // 60
+                }
+            }
+            discord_headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            }
+            r2 = requests.put(
+                f"https://discord.com/api/v10/users/@me/applications/{client_id}/role-connection",
+                json=payload, headers=discord_headers, timeout=5
+            )
+            if r2.status_code in (200, 204):
+                self.send_webhook_log(f"✅ **Discord Widget Updated!** (Episodes: {episodes}, Hours: {minutes // 60})")
+            else:
+                self.send_webhook_log(f"❌ **Discord Widget Failed:** HTTP {r2.status_code} — `{r2.text[:150]}`")
+        except Exception as e:
+            self.send_webhook_log(f"❌ **Discord Widget Crashed:** `{e}`")
+            
+    def check_auto_sync(self):
+        if not self.config.get("anilist_token"):
+            return
+        if not self.state_data.get("vlc_connected"):
+            return
+        playback = self.state_data.get("playback_state", "stopped")
+        # Fire on playing OR paused (video can end/pause at 100%)
+        if playback not in ("playing", "paused"):
+            return
+        if self.state_data.get("is_music"):
+            return
+
+        ep_str = self.state_data.get("episode_str", "")
+        if not ep_str:
+            return
+
+        ep_match = re.search(r'Episode\s*(\d+)', ep_str, re.IGNORECASE)
+        if not ep_match:
+            self.anilist_log(f"[Skip] No episode number in episode_str: '{ep_str}'")
+            return
+
+        episode_num = int(ep_match.group(1))
+        title = self.state_data.get("cleaned_title")
+        if not title:
+            self.anilist_log("[Skip] No cleaned_title in state")
+            return
+
+        cache_key = f"{title}:E{episode_num}"
+        if cache_key in self.scrobbled_episodes:
+            return
+
+        length = self.state_data.get("length", 0)
+        time_pos = self.state_data.get("time", 0)
+        if length <= 0:
+            self.anilist_log(f"[Skip] length=0 for '{title}' E{episode_num}")
+            return
+
+        pct = (time_pos / length) * 100
+        threshold = int(self.config.get("auto_sync_threshold", 90))
+        self.anilist_log(f"[Check] '{title}' E{episode_num} - {pct:.1f}% / {threshold}% threshold")
+
+        if pct >= threshold:
+            self.scrobbled_episodes.add(cache_key)
+            self.anilist_log(f"[Trigger] Syncing '{title}' E{episode_num} ({pct:.1f}% watched)")
+            success = self.sync_anilist(title, episode_num)
+            if not success:
+                # Remove from cache so it can retry next poll
+                self.scrobbled_episodes.discard(cache_key)
+                
+
+
+    def start_anilist_oauth(self):
+        """Open AniList authorization page and capture the code via local server to exchange for a token."""
+        import webbrowser
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        
+        client_id = self.config.get("anilist_client_id")
+        client_secret = self.config.get("anilist_client_secret")
+        
+        if not client_id or not client_secret:
+            self.state_data["status_message"] = "Missing AniList Client ID/Secret."
+            self.send_webhook_log("\u26a0\ufe0f **AniList OAuth Failed:** Please enter your AniList Client ID and Secret in settings first.")
+            return
+
+        REDIRECT_URI = "http://localhost:8899"
+        AUTH_URL = (
+            f"https://anilist.co/api/v2/oauth/authorize"
+            f"?client_id={client_id}&redirect_uri={REDIRECT_URI}&response_type=code"
+        )
+
+        SUCCESS_HTML = b"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>VLC RPC - AniList Connected</title>
+<style>
+  body { background: #0f1117; color: #e2e8f0; font-family: sans-serif;
+         display: flex; align-items: center; justify-content: center;
+         height: 100vh; margin: 0; }
+  .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 16px;
+           padding: 40px 48px; text-align: center; max-width: 420px; }
+  h1 { color: #4facfe; margin-bottom: 12px; }
+  p  { color: #94a3b8; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1 id="status-text">&#8987; Authenticating...</h1>
+  <p id="status-sub">Please wait while we exchange your code.</p>
+</div>
+<script>
+  // The code is in the query params. Send it to our local server to exchange.
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  if (code) {
+    fetch("/exchange?code=" + encodeURIComponent(code))
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+            document.getElementById("status-text").innerHTML = "&#10003; Authentication Successful!";
+            document.getElementById("status-sub").innerText = "You can close this window and return to VLC RPC.";
+            setTimeout(() => window.close(), 1500);
+        } else {
+            document.getElementById("status-text").innerHTML = "&#10060; Authentication Failed!";
+            document.getElementById("status-sub").innerText = data.error || "Unknown error occurred.";
+        }
+      });
+  } else {
+      document.getElementById("status-text").innerHTML = "&#10060; No Code Found!";
+      document.getElementById("status-sub").innerText = "The authorization server did not return a code.";
+  }
+</script>
+</body>
+</html>"""
+
+        backend_ref = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+
+            def do_GET(self):
+                parsed = urllib.parse.urlparse(self.path)
+                params = urllib.parse.parse_qs(parsed.query)
+
+                if parsed.path == "/exchange":
+                    code = (params.get("code") or [None])[0]
+                    if code:
+                        # Perform the code exchange!
+                        try:
+                            exchange_res = requests.post(
+                                "https://anilist.co/api/v2/oauth/token",
+                                json={
+                                    "grant_type": "authorization_code",
+                                    "client_id": client_id,
+                                    "client_secret": client_secret,
+                                    "redirect_uri": REDIRECT_URI,
+                                    "code": code
+                                },
+                                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                                timeout=10
+                            )
+                            if exchange_res.status_code == 200:
+                                token_data = exchange_res.json()
+                                backend_ref.config["anilist_token"] = token_data.get("access_token", "")
+                                save_config(backend_ref.config)
+                                backend_ref.state_data["status_message"] = "AniList connected!"
+                                backend_ref.send_webhook_log("\u2705 **AniList OAuth Successful!** Code exchanged for token.")
+                                self._respond(200, b'{"success": true}', "application/json")
+                            else:
+                                err_msg = exchange_res.json().get("message", "Exchange failed")
+                                backend_ref.send_webhook_log(f"❌ **AniList OAuth Failed:** {err_msg}")
+                                self._respond(400, f'{{"success": false, "error": "{err_msg}"}}'.encode(), "application/json")
+                        except Exception as e:
+                            backend_ref.send_webhook_log(f"❌ **AniList OAuth Error:** {str(e)}")
+                            self._respond(500, f'{{"success": false, "error": "{str(e)}"}}'.encode(), "application/json")
+                            
+                        threading.Thread(target=self.server.shutdown, daemon=True).start()
+                    else:
+                        self._respond(400, b'{"success": false, "error": "No code parameter"}', "application/json")
+                else:
+                    self._respond(200, SUCCESS_HTML, content_type="text/html")
+
+            def _respond(self, code, body, content_type="text/plain"):
+                self.send_response(code)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        try:
+            server = HTTPServer(("localhost", 8899), _Handler)
+            webbrowser.open(AUTH_URL)
+            server.serve_forever()
+        except Exception as e:
+            print(f"[AniList OAuth] Server error: {e}")
+
+
+    def start_discord_oauth(self):
+        import webbrowser
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        
+        client_id = self.config.get("discord_app_id")
+        client_secret = self.config.get("discord_client_secret") or self.config.get("discord_app_secret")
+        if not client_id or not client_secret: return
+        
+        class OAuthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                
+                query = urllib.parse.urlparse(self.path).query
+                params = urllib.parse.parse_qs(query)
+                code = params.get('code', [None])[0]
+                
+                if code:
+                    self.wfile.write(b"<h1>Success!</h1><p>You can close this window now.</p>")
+                    self.server.oauth_code = code
+                else:
+                    self.wfile.write(b"<h1>Failed</h1><p>No code returned.</p>")
+                
+                threading.Thread(target=self.server.shutdown).start()
+                
+        server = HTTPServer(('127.0.0.1', 8524), OAuthHandler)
+        server.oauth_code = None
+        
+        url = f"https://discord.com/api/oauth2/authorize?client_id={client_id}&response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A8524&scope=role_connections.write"
+        webbrowser.open(url)
+        server.serve_forever()
+        
+        if server.oauth_code:
+            data = {
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'grant_type': 'authorization_code',
+                'code': server.oauth_code,
+                'redirect_uri': 'http://127.0.0.1:8524'
+            }
+            r = requests.post('https://discord.com/api/oauth2/token', data=data)
+            if r.status_code == 200:
+                tokens = r.json()
+                self.config["discord_access_token"] = tokens.get("access_token")
+                self.config["discord_refresh_token"] = tokens.get("refresh_token")
+                save_config(self.config)
+                self.force_sync_widget()
             
     def get_dominant_color(self, url):
         try:
@@ -247,11 +707,14 @@ class RPCBackend:
         except Exception:
             pass
 
+
     def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist):
         """Fetch metadata in a background thread so the main loop stays fast."""
         try:
             season_num = None
             episode_num = None
+            media_type = self.state_data.get("media_type", "movie")
+
             se_parsed = re.search(r'Season\s+(\d+)\s+Episode\s+(\d+)', episode_str)
             if se_parsed:
                 season_num = int(se_parsed.group(1))
@@ -261,21 +724,35 @@ class RPCBackend:
                 if ep_parsed:
                     episode_num = int(ep_parsed.group(1))
 
+            year_match = re.search(r'\((\d{4})\)', episode_str)
+            year = year_match.group(1) if year_match else None
+            
+            search_title = re.sub(r'\b(19|20)\d{2}\b', '', cleaned_title)
+            search_title = re.sub(r'[\(\)]', '', search_title).strip()
+
             metadata = None
-            if is_music:
-                metadata = self.fetch_itunes_metadata(cleaned_title, artist)
-            else:
-                metadata = self.fetch_tvmaze_metadata(cleaned_title, season_num=season_num, episode_num=episode_num)
+            if media_type == "music":
+                metadata = self.fetch_itunes_metadata(search_title, artist)
+            elif media_type == "movie":
+                metadata = self.fetch_omdb_metadata(search_title, year)
+            elif media_type == "anime":
+                metadata = self.fetch_jikan_metadata(search_title)
+            elif media_type == "tv_show":
+                metadata = self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num)
                 if not metadata or not metadata.get("image_url"):
-                    metadata = self.fetch_jikan_metadata(cleaned_title)
-                if not metadata or not metadata.get("image_url"):
-                    metadata = self.fetch_wikipedia_metadata(cleaned_title)
+                    metadata = self.fetch_omdb_metadata(search_title, year)
+
+            if not metadata or not metadata.get("image_url"):
+                metadata = self.fetch_wikipedia_metadata(search_title)
 
             if metadata:
-                if metadata.get("image_url"):
-                    color = self.get_dominant_color(metadata["image_url"])
-                    if color:
-                        metadata["dominant_color"] = color
+                try:
+                    if metadata.get("image_url"):
+                        color = self.get_dominant_color(metadata["image_url"])
+                        if color:
+                            metadata["dominant_color"] = color
+                except Exception:
+                    pass
                 self.metadata_cache[cache_key] = metadata
                 self.save_metadata_cache()
 
@@ -284,6 +761,7 @@ class RPCBackend:
             self.state_data["status_message"] = "Metadata loaded successfully."
         except Exception:
             self.state_data["status_message"] = "Metadata fetch failed."
+
 
     def rpc_worker(self):
         asyncio.set_event_loop(asyncio.new_event_loop())
@@ -310,11 +788,51 @@ class RPCBackend:
                     
                     meta = vlc_data.get("information", {}).get("category", {}).get("meta", {})
                     raw_title = meta.get("title") or meta.get("filename") or "Unknown Track"
-                    # Strip common media file extensions
+                    
+                    # Smart Media Type Ingestion & Path Routing
+                    file_name = meta.get("filename", "")
+                    file_ext = os.path.splitext(file_name)[1].lower() if file_name else ""
+                    
+                    if file_ext in [".mp3", ".flac", ".wav", ".m4a", ".ogg", ".wma", ".aac"]:
+                        media_type = "music"
+                    elif "anime" in file_name.lower() or "anime" in raw_title.lower():
+                        media_type = "anime"
+                    else:
+                        media_type = "movie"
+                        
+                    # Strip extensions
                     raw_title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', raw_title, flags=re.I)
                     self.state_data["title"] = raw_title.strip()
                     self.state_data["artist"] = meta.get("artist", "")
                     self.state_data["album"] = meta.get("album", "")
+                    
+                    # Codec Parsing & Quality Tags
+                    quality = ""
+                    audio_tracks = 0
+                    has_hdr = False
+                    streams = vlc_data.get("information", {}).get("category", {})
+                    for key, stream in streams.items():
+                        if key.startswith("Stream"):
+                            res = stream.get("Resolution", "")
+                            if res:
+                                try:
+                                    w = int(res.split("x")[0])
+                                    if w >= 3840: quality = "4K"
+                                    elif w >= 1920: quality = "1080p"
+                                except: pass
+                            
+                            type_ = stream.get("Type", "")
+                            if type_ == "Audio":
+                                audio_tracks += 1
+                                
+                            color_trans = stream.get("Color transfer function", "")
+                            if "PQ" in color_trans or "HLG" in color_trans:
+                                has_hdr = True
+                                
+                    if has_hdr and quality: quality += " HDR"
+                    self.state_data["quality"] = quality
+                    self.state_data["audio_tracks"] = audio_tracks
+                    
                     if not meta and playback_state == "playing":
                         self.state_data["title"] = "Streaming Audio/Video"
                         
@@ -322,14 +840,24 @@ class RPCBackend:
                         self.current_watch_duration += self.config.get("update_interval", 2)
                         
                     cleaned_title, episode_str = clean_title(self.state_data["title"])
-                    is_music = is_music_file(self.state_data["title"], self.state_data["artist"], self.state_data["album"])
+                    
+                    if media_type != "music" and media_type != "anime":
+                        if "Episode" in episode_str or "Season" in episode_str:
+                            media_type = "tv_show"
+                    
+                    self.state_data["media_type"] = media_type
+                    is_music = (media_type == "music")
                     self.state_data["is_music"] = is_music
                     self.state_data["cleaned_title"] = cleaned_title
+                    # CRITICAL: update episode_str every poll cycle so check_auto_sync always has it
+                    self.state_data["episode_str"] = episode_str
                     track_key = f"{self.state_data['title']}:{self.state_data['artist']}"
                     
                     if self.force_update_flag:
                         last_track_key = None
                         self.force_update_flag = False
+                    
+                    self.check_auto_sync()
                     
                     if track_key != last_track_key:
                         if hasattr(self, 'last_watched_title_raw') and self.last_watched_title_raw != self.state_data['title']:
@@ -344,18 +872,16 @@ class RPCBackend:
                         last_track_key = track_key
                         if playback_state in ["playing", "paused"]:
                             self.state_data["episode_str"] = episode_str
-                            cache_key = f"music:{cleaned_title}:{self.state_data['artist']}" if is_music else f"video:{cleaned_title}:{episode_str}"
+                            cache_key = f"{media_type}:{cleaned_title}:{self.state_data['artist']}" if is_music else f"{media_type}:{cleaned_title}:{episode_str}"
                             
                             if cache_key in self.metadata_cache:
                                 self.state_data["metadata"] = self.metadata_cache[cache_key]
                                 self.state_data["local_image_path"] = self.state_data["metadata"].get("image_url")
                                 self.state_data["status_message"] = "Metadata loaded from cache."
                             else:
-                                # Clear old metadata immediately so UI updates fast
                                 self.state_data["metadata"] = None
                                 self.state_data["local_image_path"] = None
                                 self.state_data["status_message"] = "Fetching metadata..."
-                                # Fetch in background thread so we don't block VLC polling
                                 fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"])
                                 threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
                         else:
@@ -364,6 +890,17 @@ class RPCBackend:
                             self.state_data["local_image_path"] = None
                 else:
                     self.state_data["vlc_connected"] = False
+                    
+            except requests.exceptions.RequestException:
+                # Low-End CPU Hibernation Engine
+                self.state_data["vlc_connected"] = False
+                if rpc and self.state_data.get("rpc_connected"):
+                    try:
+                        rpc.clear()
+                    except Exception:
+                        pass
+                time.sleep(12)
+                continue
             except Exception as e:
                 self.state_data["vlc_connected"] = False
                 
@@ -399,77 +936,48 @@ class RPCBackend:
                 else:
                     try:
                         kwargs = {}
-                        act_type = ActivityType.LISTENING if is_music else ActivityType.WATCHING
-                        kwargs["activity_type"] = act_type
+                        media_type = self.state_data.get("media_type", "movie")
                         
-                        kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
-                        
-                        if not is_music and self.state_data["episode_str"]:
-                            # Format state as "Season X, Episode Y"
-                            ep_str = self.state_data["episode_str"].replace("Episode", ", Episode") if "Season" in self.state_data["episode_str"] else self.state_data["episode_str"]
-                            
-                            # Smart State Messages
-                            if self.current_watch_duration > 7200:
-                                state_msg = f"Marathon 🍿 • {ep_str}"
-                            elif self.current_watch_duration > 3600:
-                                state_msg = f"Binge Mode 🔥 • {ep_str}"
-                            else:
-                                state_msg = ep_str
+                        # Contextual Discord Activity Mapping
+                        if media_type == "music":
+                            kwargs["activity_type"] = ActivityType.LISTENING
+                            kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
+                            kwargs["state"] = f"by {self.state_data.get('artist', 'Unknown')}"
+                            kwargs["large_text"] = f"Album: {self.state_data.get('album', 'Unknown')}"
+                        elif media_type == "movie":
+                            kwargs["activity_type"] = ActivityType.WATCHING
+                            kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
+                            genres = self.state_data.get("metadata", {}).get("genres", "") if self.state_data.get("metadata") else ""
+                            rating = self.state_data.get("metadata", {}).get("imdb_rating", "") if self.state_data.get("metadata") else ""
+                            if rating:
+                                kwargs["state"] = f"Genres: {genres} | \u2b50 {rating}"
+                            elif genres:
+                                kwargs["state"] = f"Genres: {genres}"
                                 
+                            desc = self.state_data.get("metadata", {}).get("description", "") if self.state_data.get("metadata") else ""
+                            kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + (f" • {desc}" if desc else "")
+                        else:
+                            # tv_show or anime
+                            kwargs["activity_type"] = ActivityType.WATCHING
+                            kwargs["details"] = f"Watching {self.state_data.get('cleaned_title', self.state_data['title'])}"
+                            
+                            ep_str = self.state_data.get("episode_str", "")
                             if self.state_data["playback_state"] == "paused":
                                 kwargs["state"] = f"Paused | {ep_str}"
                             else:
-                                kwargs["state"] = state_msg
+                                kwargs["state"] = ep_str
                                 
-                            # Episode Progress as Party Size
-                            ep_num = 0
-                            m = re.search(r'Episode\s*(\d+)', self.state_data["episode_str"], re.I)
-                            if m:
-                                ep_num = int(m.group(1))
-                                
-                            total_ep = self.state_data["metadata"].get("total_episodes") if self.state_data["metadata"] else 0
-                            if not total_ep or total_ep < ep_num:
-                                total_ep = ep_num
-                                
-                            if ep_num > 0 and total_ep > 0:
-                                kwargs["party_id"] = "vlc_party_" + hashlib.md5(self.state_data.get("cleaned_title", "").encode()).hexdigest()
-                                kwargs["party_size"] = [ep_num, total_ep]
-                            
-                            # Generate short string like S4E2
-                            short_ep = ""
-                            m = re.search(r'Season\s*(\d+).*?Episode\s*(\d+)', self.state_data["episode_str"], re.I)
-                            if m:
-                                short_ep = f"S{m.group(1)}E{m.group(2)}"
-                            else:
-                                m2 = re.search(r'Episode\s*(\d+)', self.state_data["episode_str"], re.I)
-                                if m2:
-                                    short_ep = f"Ep{m2.group(1)}"
-                                    
-                            # We put the short episode tag in the small image hover text so it shows up
-                            small_txt = short_ep if short_ep else "Watching"
-                        else:
-                            if self.state_data["artist"]:
-                                if self.state_data["playback_state"] == "paused":
-                                    kwargs["state"] = f"Paused | {self.state_data['artist']}"
-                                else:
-                                    kwargs["state"] = self.state_data["artist"]
-                            elif self.state_data["playback_state"] == "paused":
-                                kwargs["state"] = "Paused"
-                            # If no artist and playing, don't set state at all (Discord rejects empty strings)
-                            small_txt = "Listening" if is_music else "Playing"
+                            kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"])
                             
                         # Assets
                         if self.state_data["metadata"] and self.state_data["metadata"].get("image_url"):
                             kwargs["large_image"] = self.state_data["metadata"]["image_url"]
-                            if self.state_data["metadata"].get("description"):
-                                kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + " • " + self.state_data["metadata"]["description"]
-                            else:
-                                kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"])
                         else:
                             kwargs["large_image"] = self.config.get("large_image_key", "vlc")
-                            kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"])
                             
-                        # Try to use configured keys, but fallback to direct URLs if using default non-existent keys
+                        if media_type == "music":
+                            kwargs["large_image"] = self.config.get("large_image_key", "music_icon")
+                            
                         play_key = self.config.get("small_image_key", "play")
                         pause_key = self.config.get("small_image_paused_key", "pause")
                         if play_key == "play": play_key = "https://iili.io/C2mXIp4.png"
@@ -487,12 +995,16 @@ class RPCBackend:
                             kwargs["start"] = current_time - self.state_data["time"]
                             kwargs["end"] = kwargs["start"] + self.state_data["length"]
 
-                        # Buttons
+                        # Discord Interaction Buttons
                         buttons = []
-                        if self.state_data["metadata"] and self.state_data["metadata"].get("page_url"):
-                            buttons.append({"label": "View Info", "url": self.state_data["metadata"]["page_url"]})
-                        buttons.append({"label": "Watch Trailer" if not is_music else "Search Song", "url": f"https://www.youtube.com/results?search_query={urllib.parse.quote(self.state_data['title'] + (' trailer' if not is_music else ''))}"})
-                        kwargs["buttons"] = buttons
+                        anilist_id = self.state_data.get("metadata", {}).get("anilistId")
+                        if media_type == "anime" and anilist_id:
+                            buttons.append({"label": "View on AniList", "url": f"https://anilist.co/anime/{anilist_id}"})
+                        elif media_type == "movie" and self.state_data.get("metadata", {}).get("page_url"):
+                            buttons.append({"label": "View IMDb", "url": self.state_data["metadata"]["page_url"]})
+                            
+                        if buttons:
+                            kwargs["buttons"] = buttons
 
                         rpc.update(**kwargs)
                     except Exception as e:
@@ -591,6 +1103,47 @@ class RPCBackend:
             pass
         return None
 
+    def fetch_omdb_metadata(self, title, year=None):
+        """Fetch movie/show metadata from OMDb API (free, no auth needed for basic use)."""
+        try:
+            params = {
+                't': title,
+                'apikey': 'trilogy',   # public demo key
+                'plot': 'short',
+                'r': 'json'
+            }
+            if year:
+                params['y'] = year
+            r = requests.get('https://www.omdbapi.com/', params=params, timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get('Response') == 'True':
+                    poster = data.get('Poster')
+                    if poster == 'N/A':
+                        poster = None
+                    rating = data.get('imdbRating')
+                    if rating == 'N/A':
+                        rating = None
+                    genres = [g.strip() for g in data.get('Genre', '').split(',') if g.strip() and g.strip() != 'N/A']
+                    plot = data.get('Plot', '')
+                    if plot == 'N/A':
+                        plot = ''
+                    imdb_id = data.get('imdbID', '')
+                    page_url = f"https://www.imdb.com/title/{imdb_id}/" if imdb_id else None
+                    media_type = data.get('Type', 'movie').capitalize()
+                    description = f"{media_type} | {rating}★ | {', '.join(genres[:2])}" if genres else f"{media_type}"
+                    return {
+                        "image_url": poster,
+                        "rating": rating,
+                        "genres": genres,
+                        "description": description,
+                        "page_url": page_url,
+                        "plot": plot
+                    }
+        except Exception:
+            pass
+        return None
+
     def fetch_wikipedia_metadata(self, title):
         meta = self.search_wikipedia(f"{title} film")
         if not meta:
@@ -626,8 +1179,8 @@ class RPCBackend:
 
 
 class WebApi:
-    def __init__(self, backend):
-        self.backend = backend
+    def __init__(self, backend_instance):
+        self.backend = backend_instance
         
     def get_config(self):
         return self.backend.config
@@ -643,8 +1196,30 @@ class WebApi:
         except Exception as e:
             return {"success": False, "error": str(e)}
             
+    def open_url(self, url):
+        import webbrowser
+        webbrowser.open(url)
+        return {"success": True}
+        
+    def sync_discord_widget(self):
+        threading.Thread(target=self.backend.force_sync_widget, daemon=True).start()
+        return {"success": True}
+            
     def force_update(self):
         self.backend.force_update_flag = True
+        return {"success": True}
+
+    def get_anilist_logs(self):
+        """Return the in-memory AniList log lines for the Logs tab."""
+        return {"success": True, "logs": list(self.backend.anilist_logs)}
+
+    def auth_anilist(self):
+        """Launch AniList OAuth2 implicit flow. Token captured via local HTTP server."""
+        threading.Thread(target=self.backend.start_anilist_oauth, daemon=True).start()
+        return {"success": True}
+
+    def auth_discord_widget(self):
+        threading.Thread(target=self.backend.start_discord_oauth, daemon=True).start()
         return {"success": True}
         
     def get_history(self):
@@ -690,8 +1265,9 @@ class WebApi:
             return {"success": False, "error": str(e)}
 
 
-backend = RPCBackend()
-api = WebApi(backend)
+# Instantiated inside __main__ to avoid blocking on import/frozen startup
+backend = None
+api = None
 
 def on_closing():
     if backend.config.get('minimize_to_tray', True):
@@ -785,28 +1361,35 @@ def setup_tray():
 
 if __name__ == '__main__':
     start_minimized = "--minimized" in sys.argv
-    
+
+    # --- Lazy backend init: create after process boots so the window appears instantly ---
+    backend = RPCBackend()
+    api = WebApi(backend)
+
     # Get correct path for PyInstaller
     if getattr(sys, 'frozen', False):
         web_path = os.path.join(sys._MEIPASS, 'web')
     else:
         web_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
-    
+
     html_file = os.path.join(web_path, 'index.html')
-    
-    window = webview.create_window('VLC RPC', html_file, js_api=api, width=780, height=640, min_size=(600, 500))
+
+    window = webview.create_window(
+        'VLC RPC', html_file, js_api=api,
+        width=780, height=640, min_size=(600, 500)
+    )
     backend.set_window(window)
-    
+
     window.events.closing += on_closing
-    
+
     def on_loaded():
         if start_minimized:
             window.hide()
-        # Start tray icon only after window is fully initialized to prevent COM deadlocks
+        # Start tray only after window loads — prevents COM deadlocks on slow PCs
         threading.Thread(target=setup_tray, daemon=True).start()
-        
+
     window.events.loaded += on_loaded
-    
+
     webview.start()
     backend.state_data["exit_flag"] = True
     os._exit(0)
