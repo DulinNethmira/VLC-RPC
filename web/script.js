@@ -266,6 +266,22 @@ window.addEventListener('pywebviewready', function() {
     setInterval(() => {
         window.pywebview.api.get_state().then(state => {
             if (state) window.updateState(state);
+
+            // ── Update checker ──────────────────────────────────────────────
+            if (state && state.update_available && !window.updatePromptShown) {
+                window.updatePromptShown = true;
+                const modal = document.getElementById('update-modal');
+                const verLabel = document.getElementById('update-version-label');
+                const changelogBox = document.getElementById('update-changelog-box');
+                const dlBtn = document.getElementById('update-download-btn');
+                const btnVer = document.getElementById('update-btn-ver');
+
+                if (verLabel) verLabel.textContent = `v${state.update_version} is available — you have v${window._currentVersion || '?'}`;
+                if (changelogBox) changelogBox.textContent = state.update_changelog || 'See GitHub for details.';
+                if (btnVer) btnVer.textContent = state.update_version;
+                if (dlBtn) dlBtn.onclick = () => window.open(state.update_download_url, '_blank');
+                if (modal) modal.style.display = 'flex';
+            }
         }).catch(err => console.error("Error fetching state:", err));
         
         // Also poll config to update AniList connect button
@@ -282,6 +298,9 @@ window.addEventListener('pywebviewready', function() {
             }
         }).catch(err => {});
     }, 1500);
+
+    // Expose current version for the modal label
+    window._currentVersion = '3.1';
 });
 // ===== AniList Logs =====
 let aniLogInterval = null;
