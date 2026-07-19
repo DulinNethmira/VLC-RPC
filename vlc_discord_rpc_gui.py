@@ -459,13 +459,11 @@ class RPCBackend:
 
         ep_match = re.search(r'Episode\s*(\d+)', ep_str, re.IGNORECASE)
         if not ep_match:
-            self.anilist_log(f"[Skip] No episode number in episode_str: '{ep_str}'")
             return
 
         episode_num = int(ep_match.group(1))
         title = self.state_data.get("cleaned_title")
         if not title:
-            self.anilist_log("[Skip] No cleaned_title in state")
             return
 
         cache_key = f"{title}:E{episode_num}"
@@ -475,21 +473,18 @@ class RPCBackend:
         length = self.state_data.get("length", 0)
         time_pos = self.state_data.get("time", 0)
         if length <= 0:
-            self.anilist_log(f"[Skip] length=0 for '{title}' E{episode_num}")
             return
 
         pct = (time_pos / length) * 100
         threshold = int(self.config.get("auto_sync_threshold", 90))
-        self.anilist_log(f"[Check] '{title}' E{episode_num} - {pct:.1f}% / {threshold}% threshold")
 
         if pct >= threshold:
             self.scrobbled_episodes.add(cache_key)
-            self.anilist_log(f"[Trigger] Syncing '{title}' E{episode_num} ({pct:.1f}% watched)")
+            self.anilist_log(f"[Trigger] Threshold crossed for '{title}' E{episode_num} ({pct:.1f}%)")
             success = self.sync_anilist(title, episode_num)
             if not success:
-                # Remove from cache so it can retry next poll
                 self.scrobbled_episodes.discard(cache_key)
-                
+
 
 
     def start_anilist_oauth(self):
@@ -892,16 +887,11 @@ class RPCBackend:
                     self.state_data["vlc_connected"] = False
                     
             except requests.exceptions.RequestException:
-                # Low-End CPU Hibernation Engine
+                # VLC is unreachable — mark disconnected and hibernate briefly
                 self.state_data["vlc_connected"] = False
-                if rpc and self.state_data.get("rpc_connected"):
-                    try:
-                        rpc.clear()
-                    except Exception:
-                        pass
-                time.sleep(12)
-                continue
-            except Exception as e:
+                time.sleep(5)
+                # Fall through to Discord reconnect logic below
+            except Exception:
                 self.state_data["vlc_connected"] = False
                 
             desired_client_id = self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID
@@ -959,7 +949,7 @@ class RPCBackend:
                         else:
                             # tv_show or anime
                             kwargs["activity_type"] = ActivityType.WATCHING
-                            kwargs["details"] = f"Watching {self.state_data.get('cleaned_title', self.state_data['title'])}"
+                            kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
                             
                             ep_str = self.state_data.get("episode_str", "")
                             if self.state_data["playback_state"] == "paused":
@@ -1007,11 +997,22 @@ class RPCBackend:
                             kwargs["buttons"] = buttons
 
                         rpc.update(**kwargs)
-                    except Exception as e:
-                        self.state_data["rpc_connected"] = False
+                    except Exception:
+                        # RPC update failed — close and force immediate reconnect
+                        try:
+                            rpc.close()
+                        except Exception:
+                            pass
                         rpc = None
+                        current_client_id = None
+                        self.state_data["rpc_connected"] = False
                         
-            time.sleep(self.config.get("update_interval", 2))
+            update_interval = self.config.get("update_interval", 2)
+            # If VLC disconnected, wait longer before next poll to save CPU
+            if not self.state_data.get("vlc_connected"):
+                time.sleep(min(update_interval * 3, 6))
+            else:
+                time.sleep(update_interval)
 
     # [metadata fetchers are omitted for brevity, keeping the same logic]
     def fetch_itunes_metadata(self, title, artist):
@@ -1206,7 +1207,24 @@ class WebApi:
         return {"success": True}
             
     def force_update(self):
-        self.backend.force_update_flag = True
+        """Force Sync button: clears stuck cover, resets metadata, and re-triggers RPC update."""
+        b = self.backend
+        # 1. Clear current metadata so the cover re-fetches
+        b.state_data["metadata"] = None
+        b.state_data["local_image_path"] = None
+        # 2. Clear the metadata cache entry for this track so it re-fetches fresh
+        title = b.state_data.get("cleaned_title", "")
+        ep_str = b.state_data.get("episode_str", "")
+        media_type = b.state_data.get("media_type", "movie")
+        artist = b.state_data.get("artist", "")
+        cache_key = f"{media_type}:{title}:{artist}" if media_type == "music" else f"{media_type}:{title}:{ep_str}"
+        if cache_key in b.metadata_cache:
+            del b.metadata_cache[cache_key]
+        # 3. Clear the scrobbled memory so AniList re-checks this episode
+        episode_key = f"{title}:E"
+        b.scrobbled_episodes = {k for k in b.scrobbled_episodes if not k.startswith(episode_key)}
+        # 4. Signal the worker to reset track key so it re-pushes RPC
+        b.force_update_flag = True
         return {"success": True}
 
     def get_anilist_logs(self):
