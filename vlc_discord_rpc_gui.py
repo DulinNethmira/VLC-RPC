@@ -25,6 +25,8 @@ CONFIG_FILE = "config.json"
 CACHE_FILE = "metadata_cache.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
+CURRENT_VERSION = "3.3"
+GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
     "client_id": DEFAULT_CLIENT_ID,
@@ -44,6 +46,18 @@ def clean_title(title):
     """Parse a raw filename into (display_title, episode_str).
     Works for both anime/TV  (S01E04, Episode 4) and movies
     (American.Sniper.2014.720p.BluRay…)."""
+    title = str(title or "")
+    title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
+    title = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
+
+    loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\-:&!,]+?)[\s\.\-_]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
+    if loose_ep:
+        ep_num = int(loose_ep.group(2))
+        explicit_ep = re.search(r'\b(?:Episode|Ep|E)\s*\d{1,4}\s*$', title, re.I)
+        if explicit_ep or not (1900 <= ep_num <= 2099):
+            cleaned = re.sub(r'[\s\.\-_]+', ' ', loose_ep.group(1)).strip()
+            return ' '.join(w.capitalize() for w in cleaned.split()), f"Episode {ep_num}"
+
     if guessit:
         try:
             guessed = guessit.guessit(title)
@@ -108,12 +122,21 @@ def clean_title(title):
         r'\bdual[- ]audio\b', r'\bmulti\b', r'\beng\b', r'\bsub\b', r'\bdub\b',
         r'\byify\b', r'\bxvid\b', r'\baac\b', r'\byts\b', r'\b\[yts\.mx\]\b',
         r'\brepack\b', r'\bextended\b'
+
     ]
+
     for word in words_to_remove:
+
         title = re.sub(word, '', title, flags=re.IGNORECASE)
 
+
+
     title = re.sub(r'[\s\.\-_]+', ' ', title).strip()
+
     return title, episode_str
+
+
+
 
 def is_music_file(filename, artist, album):
     if not filename:
@@ -124,6 +147,16 @@ def is_music_file(filename, artist, album):
     if album and artist and artist.lower() != "unknown artist":
         return True
     return False
+
+
+def ensure_https(url):
+    """Force-upgrade http:// image URLs to https:// so Discord accepts them.
+    Discord silently rejects http:// large_image URLs and falls back to the
+    default VLC logo even when a valid poster URL is set."""
+    if url and isinstance(url, str) and url.startswith("http://"):
+        return "https://" + url[7:]
+    return url
+
 
 def load_config():
     if getattr(sys, 'frozen', False):
@@ -177,7 +210,11 @@ class RPCBackend:
             "metadata": None,
             "episode_str": "",
             "local_image_path": None,
-            "exit_flag": False
+            "exit_flag": False,
+            "update_available": False,
+            "update_version": "",
+            "update_download_url": "",
+            "update_changelog": ""
         }
         self.force_update_flag = False
         self.scrobbled_episodes = set()
@@ -190,6 +227,7 @@ class RPCBackend:
         self.metadata_cache = self.load_metadata_cache()
         self.worker_thread = threading.Thread(target=self.rpc_worker, daemon=True)
         self.worker_thread.start()
+        threading.Thread(target=self.check_for_updates, daemon=True).start()
 
     def anilist_log(self, msg):
         """Append timestamped entry to in-app AniList log and Discord webhook."""
@@ -203,6 +241,52 @@ class RPCBackend:
         except Exception:
             pass
         self.send_webhook_log(msg)
+
+    def check_for_updates(self):
+        """Check GitHub Releases API for a newer version. Runs once on a daemon thread.
+        Fails silently on any network error to never block or crash the app."""
+        try:
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+            headers = {
+                "User-Agent": f"VLC-RPC/{CURRENT_VERSION}",
+                "Accept": "application/vnd.github+json"
+            }
+            r = requests.get(api_url, headers=headers, timeout=8)
+            if r.status_code != 200:
+                return
+
+            data = r.json()
+            latest_tag = data.get("tag_name", "").lstrip("v")
+            if not latest_tag:
+                return
+
+            # Parse versions as tuples for reliable comparison: "3.1" > "3.0" > "2.9"
+            def _parse(v):
+                try:
+                    return tuple(int(x) for x in v.strip().split("."))
+                except Exception:
+                    return (0,)
+
+            if _parse(latest_tag) > _parse(CURRENT_VERSION):
+                # Find the installer asset download URL
+                download_url = data.get("html_url", "")
+                for asset in data.get("assets", []):
+                    name = asset.get("name", "").lower()
+                    if name.endswith(".exe") and "setup" in name:
+                        download_url = asset.get("browser_download_url", download_url)
+                        break
+
+                changelog = data.get("body", "").strip()
+                # Trim changelog to first 400 chars to keep modal compact
+                if len(changelog) > 400:
+                    changelog = changelog[:397] + "..."
+
+                self.state_data["update_available"] = True
+                self.state_data["update_version"] = latest_tag
+                self.state_data["update_download_url"] = download_url
+                self.state_data["update_changelog"] = changelog
+        except Exception:
+            pass  # Silently ignore all network / parse errors
 
     def setup_database(self):
         if getattr(sys, 'frozen', False):
@@ -459,13 +543,11 @@ class RPCBackend:
 
         ep_match = re.search(r'Episode\s*(\d+)', ep_str, re.IGNORECASE)
         if not ep_match:
-            self.anilist_log(f"[Skip] No episode number in episode_str: '{ep_str}'")
             return
 
         episode_num = int(ep_match.group(1))
         title = self.state_data.get("cleaned_title")
         if not title:
-            self.anilist_log("[Skip] No cleaned_title in state")
             return
 
         cache_key = f"{title}:E{episode_num}"
@@ -475,21 +557,18 @@ class RPCBackend:
         length = self.state_data.get("length", 0)
         time_pos = self.state_data.get("time", 0)
         if length <= 0:
-            self.anilist_log(f"[Skip] length=0 for '{title}' E{episode_num}")
             return
 
         pct = (time_pos / length) * 100
         threshold = int(self.config.get("auto_sync_threshold", 90))
-        self.anilist_log(f"[Check] '{title}' E{episode_num} - {pct:.1f}% / {threshold}% threshold")
 
         if pct >= threshold:
             self.scrobbled_episodes.add(cache_key)
-            self.anilist_log(f"[Trigger] Syncing '{title}' E{episode_num} ({pct:.1f}% watched)")
+            self.anilist_log(f"[Trigger] Threshold crossed for '{title}' E{episode_num} ({pct:.1f}%)")
             success = self.sync_anilist(title, episode_num)
             if not success:
-                # Remove from cache so it can retry next poll
                 self.scrobbled_episodes.discard(cache_key)
-                
+
 
 
     def start_anilist_oauth(self):
@@ -756,9 +835,16 @@ class RPCBackend:
                 self.metadata_cache[cache_key] = metadata
                 self.save_metadata_cache()
 
-            self.state_data["metadata"] = metadata
-            self.state_data["local_image_path"] = metadata.get("image_url") if metadata else None
-            self.state_data["status_message"] = "Metadata loaded successfully."
+            current_title = self.state_data.get("cleaned_title") or self.state_data.get("title")
+            current_key = (
+                f"{self.state_data.get('media_type', 'movie')}:{current_title}:{self.state_data.get('artist', '')}"
+                if self.state_data.get("is_music")
+                else f"{self.state_data.get('media_type', 'movie')}:{current_title}:{self.state_data.get('episode_str', '')}"
+            )
+            if current_key == cache_key:
+                self.state_data["metadata"] = metadata
+                self.state_data["local_image_path"] = metadata.get("image_url") if metadata else None
+                self.state_data["status_message"] = "Metadata loaded successfully."
         except Exception:
             self.state_data["status_message"] = "Metadata fetch failed."
 
@@ -768,6 +854,8 @@ class RPCBackend:
         rpc = None
         current_client_id = None
         last_track_key = None
+        rpc_backoff = 1          # seconds to wait before next reconnect attempt
+        rpc_reconnect_at = 0.0   # earliest epoch time allowed for a reconnect
         
         while not self.state_data["exit_flag"]:
             try:
@@ -787,10 +875,13 @@ class RPCBackend:
                     self.state_data["volume"] = int((raw_vol / 256.0) * 100) if raw_vol else 0
                     
                     meta = vlc_data.get("information", {}).get("category", {}).get("meta", {})
-                    raw_title = meta.get("title") or meta.get("filename") or "Unknown Track"
+                    file_name = meta.get("filename", "")
+                    input_uri = meta.get("url") or ""
+                    current_plid = str(vlc_data.get("currentplid", ""))  # changes on every playlist-item switch
+                    tag_title = meta.get("title", "")
+                    raw_title = tag_title or file_name or "Unknown Track"
                     
                     # Smart Media Type Ingestion & Path Routing
-                    file_name = meta.get("filename", "")
                     file_ext = os.path.splitext(file_name)[1].lower() if file_name else ""
                     
                     if file_ext in [".mp3", ".flac", ".wav", ".m4a", ".ogg", ".wma", ".aac"]:
@@ -805,6 +896,7 @@ class RPCBackend:
                     self.state_data["title"] = raw_title.strip()
                     self.state_data["artist"] = meta.get("artist", "")
                     self.state_data["album"] = meta.get("album", "")
+                    self.state_data["local_arturl"] = meta.get("artwork_url", "")
                     
                     # Codec Parsing & Quality Tags
                     quality = ""
@@ -839,7 +931,15 @@ class RPCBackend:
                     if playback_state == "playing":
                         self.current_watch_duration += self.config.get("update_interval", 2)
                         
-                    cleaned_title, episode_str = clean_title(self.state_data["title"])
+                    # VLC often keeps a stale/generic title tag while filename changes.
+                    # Parse filename first so episode-to-episode switches are detected.
+                    cleaned_title, episode_str = clean_title(file_name or self.state_data["title"])
+                    if tag_title and not episode_str:
+                        alt_title, alt_episode = clean_title(tag_title)
+                        if alt_episode:
+                            episode_str = alt_episode
+                        if not cleaned_title:
+                            cleaned_title = alt_title
                     
                     if media_type != "music" and media_type != "anime":
                         if "Episode" in episode_str or "Season" in episode_str:
@@ -851,29 +951,32 @@ class RPCBackend:
                     self.state_data["cleaned_title"] = cleaned_title
                     # CRITICAL: update episode_str every poll cycle so check_auto_sync always has it
                     self.state_data["episode_str"] = episode_str
-                    track_key = f"{self.state_data['title']}:{self.state_data['artist']}"
-                    
+                    # current_plid is VLC's internal playlist-item ID — guaranteed to
+                    # change when the user moves to the next episode, even if the
+                    # filename/title metadata hasn't refreshed yet.
+                    track_key = f"{current_plid}:{input_uri}:{file_name}:{self.state_data['title']}:{cleaned_title}:{episode_str}:{self.state_data['artist']}"
+
                     if self.force_update_flag:
                         last_track_key = None
                         self.force_update_flag = False
-                    
+
                     self.check_auto_sync()
-                    
+
                     if track_key != last_track_key:
                         if hasattr(self, 'last_watched_title_raw') and self.last_watched_title_raw != self.state_data['title']:
                             self.add_to_history(self.last_watched_title, self.last_watched_ep, self.last_watched_music, self.current_watch_duration)
                             self.current_watch_duration = 0
-                            
+
                         self.last_watched_title_raw = self.state_data['title']
                         self.last_watched_title = cleaned_title
                         self.last_watched_ep = episode_str
                         self.last_watched_music = is_music
-                        
+
                         last_track_key = track_key
                         if playback_state in ["playing", "paused"]:
                             self.state_data["episode_str"] = episode_str
                             cache_key = f"{media_type}:{cleaned_title}:{self.state_data['artist']}" if is_music else f"{media_type}:{cleaned_title}:{episode_str}"
-                            
+
                             if cache_key in self.metadata_cache:
                                 self.state_data["metadata"] = self.metadata_cache[cache_key]
                                 self.state_data["local_image_path"] = self.state_data["metadata"].get("image_url")
@@ -890,22 +993,17 @@ class RPCBackend:
                             self.state_data["local_image_path"] = None
                 else:
                     self.state_data["vlc_connected"] = False
-                    
+
             except requests.exceptions.RequestException:
-                # Low-End CPU Hibernation Engine
+                # VLC is unreachable — mark disconnected and hibernate briefly
                 self.state_data["vlc_connected"] = False
-                if rpc and self.state_data.get("rpc_connected"):
-                    try:
-                        rpc.clear()
-                    except Exception:
-                        pass
-                time.sleep(12)
-                continue
-            except Exception as e:
+                time.sleep(5)
+                # Fall through to Discord reconnect logic below
+            except Exception:
                 self.state_data["vlc_connected"] = False
-                
+
             desired_client_id = self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID
-            
+
             if rpc and current_client_id != desired_client_id:
                 try:
                     rpc.close()
@@ -914,18 +1012,22 @@ class RPCBackend:
                 rpc = None
                 self.state_data["rpc_connected"] = False
 
-            if not rpc:
+            if not rpc and time.time() >= rpc_reconnect_at:
                 try:
                     rpc = Presence(desired_client_id)
                     rpc.connect()
                     current_client_id = desired_client_id
                     self.state_data["rpc_connected"] = True
-                    self.state_data["status_message"] = f"Connected to Discord."
-                except Exception as e:
+                    self.state_data["status_message"] = "Connected to Discord."
+                    rpc_backoff = 1       # reset on successful connect
+                    rpc_reconnect_at = 0.0
+                except Exception:
                     rpc = None
                     current_client_id = None
                     self.state_data["rpc_connected"] = False
-                    self.state_data["status_message"] = f"Discord connection failed."
+                    self.state_data["status_message"] = "Discord not found — retrying..."
+                    rpc_reconnect_at = time.time() + rpc_backoff
+                    rpc_backoff = min(rpc_backoff * 2, 30)  # exponential backoff, cap 30 s
 
             if rpc and self.state_data["rpc_connected"]:
                 if not self.state_data["vlc_connected"] or self.state_data["playback_state"] not in ["playing", "paused"]:
@@ -937,7 +1039,7 @@ class RPCBackend:
                     try:
                         kwargs = {}
                         media_type = self.state_data.get("media_type", "movie")
-                        
+
                         # Contextual Discord Activity Mapping
                         if media_type == "music":
                             kwargs["activity_type"] = ActivityType.LISTENING
@@ -947,71 +1049,91 @@ class RPCBackend:
                         elif media_type == "movie":
                             kwargs["activity_type"] = ActivityType.WATCHING
                             kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
-                            genres = self.state_data.get("metadata", {}).get("genres", "") if self.state_data.get("metadata") else ""
-                            rating = self.state_data.get("metadata", {}).get("imdb_rating", "") if self.state_data.get("metadata") else ""
-                            if rating:
-                                kwargs["state"] = f"Genres: {genres} | \u2b50 {rating}"
-                            elif genres:
-                                kwargs["state"] = f"Genres: {genres}"
-                                
+                            _meta = self.state_data.get("metadata") or {}
+                            genres = _meta.get("genres", [])
+                            genre_str = ", ".join(genres[:2]) if isinstance(genres, list) else str(genres)
+                            rating = _meta.get("rating") or _meta.get("imdb_rating") or ""
+                            if rating and genre_str:
+                                kwargs["state"] = f"{genre_str} | ⭐ {rating}"
+                            elif genre_str:
+                                kwargs["state"] = f"Genres: {genre_str}"
+                            elif rating:
+                                kwargs["state"] = f"⭐ {rating}"
+
                             desc = self.state_data.get("metadata", {}).get("description", "") if self.state_data.get("metadata") else ""
                             kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + (f" • {desc}" if desc else "")
                         else:
                             # tv_show or anime
                             kwargs["activity_type"] = ActivityType.WATCHING
-                            kwargs["details"] = f"Watching {self.state_data.get('cleaned_title', self.state_data['title'])}"
-                            
+                            kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
+
                             ep_str = self.state_data.get("episode_str", "")
                             if self.state_data["playback_state"] == "paused":
                                 kwargs["state"] = f"Paused | {ep_str}"
                             else:
                                 kwargs["state"] = ep_str
-                                
+
                             kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"])
-                            
-                        # Assets
+
+                        # Assets — ensure_https() forces https:// so Discord accepts the URL.
+                        # (Discord silently ignores http:// poster URLs, showing the VLC logo instead.)
+                        # The broken music override is removed — metadata image_url (iTunes artwork) is used directly.
                         if self.state_data["metadata"] and self.state_data["metadata"].get("image_url"):
-                            kwargs["large_image"] = self.state_data["metadata"]["image_url"]
+                            kwargs["large_image"] = ensure_https(self.state_data["metadata"]["image_url"])
                         else:
                             kwargs["large_image"] = self.config.get("large_image_key", "vlc")
-                            
-                        if media_type == "music":
-                            kwargs["large_image"] = self.config.get("large_image_key", "music_icon")
-                            
+
                         play_key = self.config.get("small_image_key", "play")
                         pause_key = self.config.get("small_image_paused_key", "pause")
                         if play_key == "play": play_key = "https://iili.io/C2mXIp4.png"
                         if pause_key == "pause": pause_key = "https://iili.io/C2mXAj2.png"
-                            
+
                         if self.state_data["playback_state"] == "playing":
                             kwargs["small_image"] = play_key
                             kwargs["small_text"] = "Playing"
                         else:
                             kwargs["small_image"] = pause_key
                             kwargs["small_text"] = "Paused"
-                            
+
                         if self.state_data["playback_state"] == "playing" and self.state_data["length"] > 0:
                             current_time = int(time.time())
                             kwargs["start"] = current_time - self.state_data["time"]
                             kwargs["end"] = kwargs["start"] + self.state_data["length"]
 
                         # Discord Interaction Buttons
+                        # Use `or {}` guard: state_data["metadata"] is None when loading,
+                        # dict.get(key, default) returns the default only when the key is ABSENT.
+                        # Without `or {}`, None.get("anilistId") raises AttributeError silently.
                         buttons = []
-                        anilist_id = self.state_data.get("metadata", {}).get("anilistId")
+                        _btn_meta = self.state_data.get("metadata") or {}
+                        anilist_id = _btn_meta.get("anilistId")
                         if media_type == "anime" and anilist_id:
                             buttons.append({"label": "View on AniList", "url": f"https://anilist.co/anime/{anilist_id}"})
-                        elif media_type == "movie" and self.state_data.get("metadata", {}).get("page_url"):
-                            buttons.append({"label": "View IMDb", "url": self.state_data["metadata"]["page_url"]})
-                            
+                        elif media_type == "movie" and _btn_meta.get("page_url"):
+                            buttons.append({"label": "View IMDb", "url": _btn_meta["page_url"]})
+
                         if buttons:
                             kwargs["buttons"] = buttons
 
                         rpc.update(**kwargs)
-                    except Exception as e:
-                        self.state_data["rpc_connected"] = False
+                    except Exception:
+                        # RPC update failed — close and schedule reconnect with backoff
+                        try:
+                            rpc.close()
+                        except Exception:
+                            pass
                         rpc = None
-                        
-            time.sleep(self.config.get("update_interval", 2))
+                        current_client_id = None
+                        self.state_data["rpc_connected"] = False
+                        rpc_reconnect_at = time.time() + rpc_backoff
+                        rpc_backoff = min(rpc_backoff * 2, 30)
+
+            update_interval = self.config.get("update_interval", 2)
+            # If VLC disconnected, wait longer before next poll to save CPU
+            if not self.state_data.get("vlc_connected"):
+                time.sleep(min(update_interval * 3, 6))
+            else:
+                time.sleep(update_interval)
 
     # [metadata fetchers are omitted for brevity, keeping the same logic]
     def fetch_itunes_metadata(self, title, artist):
@@ -1108,7 +1230,7 @@ class RPCBackend:
         try:
             params = {
                 't': title,
-                'apikey': 'trilogy',   # public demo key
+                'apikey': 'thewdb',    # public demo key (thewdb is more reliable than trilogy)
                 'plot': 'short',
                 'r': 'json'
             }
@@ -1206,7 +1328,24 @@ class WebApi:
         return {"success": True}
             
     def force_update(self):
-        self.backend.force_update_flag = True
+        """Force Sync button: clears stuck cover, resets metadata, and re-triggers RPC update."""
+        b = self.backend
+        # 1. Clear current metadata so the cover re-fetches
+        b.state_data["metadata"] = None
+        b.state_data["local_image_path"] = None
+        # 2. Clear the metadata cache entry for this track so it re-fetches fresh
+        title = b.state_data.get("cleaned_title", "")
+        ep_str = b.state_data.get("episode_str", "")
+        media_type = b.state_data.get("media_type", "movie")
+        artist = b.state_data.get("artist", "")
+        cache_key = f"{media_type}:{title}:{artist}" if media_type == "music" else f"{media_type}:{title}:{ep_str}"
+        if cache_key in b.metadata_cache:
+            del b.metadata_cache[cache_key]
+        # 3. Clear the scrobbled memory so AniList re-checks this episode
+        episode_key = f"{title}:E"
+        b.scrobbled_episodes = {k for k in b.scrobbled_episodes if not k.startswith(episode_key)}
+        # 4. Signal the worker to reset track key so it re-pushes RPC
+        b.force_update_flag = True
         return {"success": True}
 
     def get_anilist_logs(self):
