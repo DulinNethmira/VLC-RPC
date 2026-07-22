@@ -271,8 +271,45 @@ window.addEventListener('pywebviewready', function() {
                 if (verLabel) verLabel.textContent = `v${state.update_version} is available — you have v${window._currentVersion || '?'}`;
                 if (changelogBox) changelogBox.textContent = state.update_changelog || 'See GitHub for details.';
                 if (btnVer) btnVer.textContent = state.update_version;
-                if (dlBtn) dlBtn.onclick = () => window.open(state.update_download_url, '_blank');
+                if (dlBtn) {
+                    dlBtn.onclick = () => {
+                        dlBtn.disabled = true;
+                        dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
+                        window.pywebview.api.trigger_download_update();
+                    };
+                }
                 if (modal) modal.style.display = 'flex';
+            }
+
+            if (state && state.update_status === "downloading") {
+                const dlBtn = document.getElementById('update-download-btn');
+                if (dlBtn) {
+                    dlBtn.disabled = true;
+                    dlBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Downloading... ${state.update_progress || 0}%`;
+                }
+            } else if (state && state.update_status === "ready") {
+                const dlBtn = document.getElementById('update-download-btn');
+                if (dlBtn && dlBtn.dataset.ready !== "true") {
+                    dlBtn.dataset.ready = "true";
+                    dlBtn.disabled = false;
+                    dlBtn.style.background = "#22c55e";
+                    dlBtn.style.borderColor = "#16a34a";
+                    dlBtn.style.color = "#fff";
+                    dlBtn.innerHTML = '<i class="fas fa-box-open"></i> Install & Restart';
+                    dlBtn.onclick = () => {
+                        dlBtn.disabled = true;
+                        dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Installing...';
+                        window.pywebview.api.install_update();
+                    };
+                }
+            } else if (state && state.update_status === "error") {
+                const dlBtn = document.getElementById('update-download-btn');
+                if (dlBtn && dlBtn.dataset.error !== "true") {
+                    dlBtn.dataset.error = "true";
+                    dlBtn.disabled = false;
+                    dlBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Download Failed (Try Browser)';
+                    dlBtn.onclick = () => window.open(state.update_download_url, '_blank');
+                }
             }
         }).catch(err => console.error("Error fetching state:", err));
         

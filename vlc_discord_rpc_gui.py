@@ -25,7 +25,7 @@ CONFIG_FILE = "config.json"
 CACHE_FILE = "metadata_cache.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "3.4"
+CURRENT_VERSION = "3.5"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1362,6 +1362,58 @@ class WebApi:
         """Launch AniList OAuth2 implicit flow. Token captured via local HTTP server."""
         threading.Thread(target=self.backend.start_anilist_oauth, daemon=True).start()
         return {"success": True}
+
+    def trigger_download_update(self):
+        """Start downloading the update in a background thread."""
+        download_url = self.backend.state_data.get("update_download_url")
+        if not download_url:
+            return {"success": False, "error": "No download URL found."}
+
+        self.backend.state_data["update_status"] = "downloading"
+        self.backend.state_data["update_progress"] = 0
+        
+        def _download_task():
+            try:
+                import tempfile
+                # Request the file
+                r = requests.get(download_url, stream=True, timeout=20)
+                r.raise_for_status()
+                total_size = int(r.headers.get('content-length', 0))
+                
+                temp_exe = os.path.join(tempfile.gettempdir(), "VLC_RPC_Update.exe")
+                downloaded_size = 0
+                
+                with open(temp_exe, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            if total_size > 0:
+                                self.backend.state_data["update_progress"] = int((downloaded_size / total_size) * 100)
+                
+                self.backend.state_data["update_temp_exe"] = temp_exe
+                self.backend.state_data["update_status"] = "ready"
+                self.backend.state_data["update_progress"] = 100
+            except Exception as e:
+                self.backend.state_data["update_status"] = "error"
+                print(f"[Updater] Download failed: {e}")
+
+        threading.Thread(target=_download_task, daemon=True).start()
+        return {"success": True}
+
+    def install_update(self):
+        """Launch the downloaded silent installer and kill this app."""
+        temp_exe = self.backend.state_data.get("update_temp_exe")
+        if not temp_exe or not os.path.exists(temp_exe):
+            return {"success": False, "error": "Update file not found."}
+
+        import subprocess
+        try:
+            subprocess.Popen([temp_exe, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/FORCECLOSEAPPLICATIONS"], 
+                             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+            os._exit(0)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def auth_discord_widget(self):
         threading.Thread(target=self.backend.start_discord_oauth, daemon=True).start()
