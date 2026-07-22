@@ -25,7 +25,7 @@ CONFIG_FILE = "config.json"
 CACHE_FILE = "metadata_cache.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "3.3"
+CURRENT_VERSION = "3.4"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -364,7 +364,11 @@ class RPCBackend:
             # ── Step 1b: User active-list lookup (solves season ambiguity) ─
             media_id = None
             total_episodes = None
-            search_lower = re.sub(r'\s*\(\d{4}\)', '', title).strip().lower()
+            def _normalize(text):
+                if not text: return ""
+                return re.sub(r'[^\w\s]', ' ', text).strip().lower()
+
+            search_normalized = _normalize(re.sub(r'\s*\(\d{4}\)', '', title))
 
             if viewer_id:
                 list_q = """
@@ -381,11 +385,13 @@ class RPCBackend:
                 def _match(media):
                     cands = []
                     t = media.get("title") or {}
-                    if t.get("english"): cands.append(t["english"].lower())
-                    if t.get("romaji"):  cands.append(t["romaji"].lower())
+                    if t.get("english"): cands.append(_normalize(t["english"]))
+                    if t.get("romaji"):  cands.append(_normalize(t["romaji"]))
                     for syn in (media.get("synonyms") or []):
-                        cands.append(syn.lower())
-                    return any(search_lower in c or c in search_lower for c in cands)
+                        cands.append(_normalize(syn))
+                    # Remove extra spaces for even fuzzier matching
+                    search_compact = re.sub(r'\s+', ' ', search_normalized)
+                    return any(search_compact in re.sub(r'\s+', ' ', c) or re.sub(r'\s+', ' ', c) in search_compact for c in cands)
 
                 mlc = (lists_data.get("data") or {}).get("MediaListCollection") or {}
                 for lst in mlc.get("lists", []):
@@ -411,7 +417,7 @@ class RPCBackend:
                   }
                 }"""
                 page_data = _gql({"query": page_q,
-                                   "variables": {"search": search_lower, "type": "ANIME"}})
+                                   "variables": {"search": search_normalized, "type": "ANIME"}})
                 candidates = ((page_data.get("data") or {}).get("Page") or {}).get("media", [])
                 for m in candidates:
                     fmt = (m.get("format") or "").upper()
