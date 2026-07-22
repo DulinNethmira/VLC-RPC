@@ -1,6 +1,6 @@
 [Setup]
 AppName=VLC RPC
-AppVersion=3.4
+AppVersion=3.5
 DefaultDirName={pf}\VLC RPC
 DefaultGroupName=VLC RPC
 OutputDir=dist
@@ -22,4 +22,4 @@ Name: "{group}\VLC RPC"; Filename: "{app}\vlc_discord_rpc_gui.exe"
 Name: "{autodesktop}\VLC RPC"; Filename: "{app}\vlc_discord_rpc_gui.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\vlc_discord_rpc_gui.exe"; Description: "{cm:LaunchProgram,VLC RPC}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\vlc_discord_rpc_gui.exe"; Description: "{cm:LaunchProgram,VLC RPC}"; Flags: nowait postinstall runasoriginaluser
