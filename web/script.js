@@ -508,3 +508,77 @@ document.querySelectorAll('.nav-item').forEach(item => {
     });
 });
 
+// === Manual Check for Updates ===
+function checkUpdates() {
+    const btn = document.querySelector('button[onclick="checkUpdates()"]');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+    }
+
+    window.pywebview.api.manual_check_for_updates().then(result => {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-arrow-up"></i> Check for Updates';
+        }
+
+        if (result && result.update_available) {
+            // Populate and show the existing update modal
+            window.updatePromptShown = true;
+            const modal = document.getElementById('update-modal');
+            const verLabel = document.getElementById('update-version-label');
+            const changelogBox = document.getElementById('update-changelog-box');
+            const dlBtn = document.getElementById('update-download-btn');
+            const btnVer = document.getElementById('update-btn-ver');
+
+            if (verLabel) verLabel.textContent = `v${result.update_version} is available — you have v${result.current_version || '?'}`;
+            if (changelogBox) changelogBox.textContent = result.update_changelog || 'See GitHub for details.';
+            if (btnVer) btnVer.textContent = result.update_version;
+            if (dlBtn) {
+                dlBtn.dataset.ready = "";
+                dlBtn.dataset.error = "";
+                dlBtn.disabled = false;
+                dlBtn.style.background = "";
+                dlBtn.style.borderColor = "";
+                dlBtn.style.color = "";
+                dlBtn.innerHTML = '<i class="fas fa-download"></i> Download Update';
+                dlBtn.onclick = () => {
+                    dlBtn.disabled = true;
+                    dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
+                    window.pywebview.api.trigger_download_update();
+                };
+            }
+            if (modal) modal.style.display = 'flex';
+        } else {
+            // Show a "you're up to date" toast
+            const toast = document.createElement('div');
+            toast.style.cssText = `
+                position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+                background: #1e1e2e; border: 1px solid #43b581; color: #43b581;
+                padding: 12px 24px; border-radius: 12px; font-size: 0.9rem;
+                font-weight: 600; z-index: 9999; box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+                display: flex; align-items: center; gap: 10px; animation: fadeIn 0.3s ease;
+            `;
+            toast.innerHTML = '<i class="fas fa-check-circle"></i> You\'re up to date! (v' + (result.current_version || '?') + ')';
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3500);
+        }
+    }).catch(() => {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-arrow-up"></i> Check for Updates';
+        }
+        const toast = document.createElement('div');
+        toast.style.cssText = `
+            position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+            background: #1e1e2e; border: 1px solid #ed4245; color: #ed4245;
+            padding: 12px 24px; border-radius: 12px; font-size: 0.9rem;
+            font-weight: 600; z-index: 9999; box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            display: flex; align-items: center; gap: 10px;
+        `;
+        toast.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Could not reach GitHub. Check your connection.';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3500);
+    });
+}
+

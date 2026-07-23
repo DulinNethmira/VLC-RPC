@@ -1513,6 +1513,63 @@ class WebApi:
         threading.Thread(target=self.backend.start_anilist_oauth, daemon=True).start()
         return {"success": True}
 
+    def manual_check_for_updates(self):
+        """Triggered by Check for Updates button on frontend."""
+        def _check():
+            try:
+                api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+                headers = {
+                    "User-Agent": f"VLC-RPC/{CURRENT_VERSION}",
+                    "Accept": "application/vnd.github+json"
+                }
+                r = requests.get(api_url, headers=headers, timeout=8)
+                if r.status_code != 200:
+                    return {"update_available": False, "current_version": CURRENT_VERSION}
+
+                data = r.json()
+                latest_tag = data.get("tag_name", "").lstrip("v")
+                if not latest_tag:
+                    return {"update_available": False, "current_version": CURRENT_VERSION}
+                
+                # Parse versions as tuples for reliable comparison
+                def _parse(v):
+                    try:
+                        return tuple(int(x) for x in v.strip().split("."))
+                    except Exception:
+                        return (0,)
+
+                if _parse(latest_tag) > _parse(CURRENT_VERSION):
+                    download_url = data.get("html_url", "")
+                    for asset in data.get("assets", []):
+                        name = asset.get("name", "").lower()
+                        if name.endswith(".exe") and "setup" in name:
+                            download_url = asset.get("browser_download_url", download_url)
+                            break
+                    changelog = data.get("body", "").strip()
+                    if len(changelog) > 400:
+                        changelog = changelog[:397] + "..."
+                    
+                    self.backend.state_data["update_available"] = True
+                    self.backend.state_data["update_version"] = latest_tag
+                    self.backend.state_data["update_download_url"] = download_url
+                    self.backend.state_data["update_changelog"] = changelog
+                    return {
+                        "update_available": True,
+                        "current_version": CURRENT_VERSION,
+                        "update_version": latest_tag,
+                        "update_changelog": changelog
+                    }
+                else:
+                    return {"update_available": False, "current_version": CURRENT_VERSION}
+            except Exception as e:
+                return {"update_available": False, "current_version": CURRENT_VERSION, "error": str(e)}
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(_check)
+            res = future.result()
+        return res
+
     def trigger_download_update(self):
         """Start downloading the update in a background thread."""
         download_url = self.backend.state_data.get("update_download_url")
