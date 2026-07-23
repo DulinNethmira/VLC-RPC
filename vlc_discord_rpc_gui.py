@@ -61,7 +61,7 @@ def query_gemini_title(filename, api_key):
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"response_mime_type": "application/json"},
-        "tools": [{"google_search": {}}]
+        "tools": [{"googleSearch": {}}]
     }
     try:
         r = requests.post(url, json=payload, timeout=10)

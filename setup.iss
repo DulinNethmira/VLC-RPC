@@ -6,7 +6,7 @@ DefaultGroupName=VLC RPC
 OutputDir=dist
 OutputBaseFilename=VLC RPC Setup
 SetupIconFile=web\icon.ico
-UninstallDisplayIcon={app}\vlc_discord_rpc_gui.exe
+UninstallDisplayIcon={app}\VLC RPC.exe
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
@@ -15,11 +15,11 @@ ArchitecturesInstallIn64BitMode=x64
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "dist\vlc_discord_rpc_gui\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\VLC RPC\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\VLC RPC"; Filename: "{app}\vlc_discord_rpc_gui.exe"
-Name: "{autodesktop}\VLC RPC"; Filename: "{app}\vlc_discord_rpc_gui.exe"; Tasks: desktopicon
+Name: "{group}\VLC RPC"; Filename: "{app}\VLC RPC.exe"
+Name: "{autodesktop}\VLC RPC"; Filename: "{app}\VLC RPC.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\vlc_discord_rpc_gui.exe"; Description: "{cm:LaunchProgram,VLC RPC}"; Flags: nowait postinstall runasoriginaluser
+Filename: "{app}\VLC RPC.exe"; Description: "{cm:LaunchProgram,VLC RPC}"; Flags: nowait postinstall runasoriginaluser
