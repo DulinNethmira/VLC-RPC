@@ -17,6 +17,7 @@ VLC RPC seamlessly connects your VLC Media Player to Discord. It shows your frie
 ## ✨ Features
 
 ### 🎯 Core Engine
+- **Gemini AI Title Parsing** — Optional integration with Google Gemini AI API to extract perfect titles and episode numbers from extremely messy, abbreviated, or non-standard video filenames that standard parsers fail on.
 - **Smart Title Parsing** — Built-in `GuessIt` engine strips scene tags (`1080p`, `x264`, `BluRay`, `YIFY`) to display clean titles like *The Matrix (1999)* or *One Piece Episode 1168*.
 - **Universal Out-of-the-Box** — Uses the official VLC Discord application ID. No need to create Discord developer apps or set up client IDs.
 - **Media Type Detection** — Automatically classifies content as **Anime**, **Movie**, **TV Show**, or **Music** and routes to the appropriate metadata provider.
@@ -36,7 +37,7 @@ VLC RPC seamlessly connects your VLC Media Player to Discord. It shows your frie
 ### 🖥️ Dashboard & Tracking
 - **Modern WebView UI** — Beautiful glassmorphism design with ambient glow effects, built with the Outfit font family.
 - **Live Watch History** — SQLite-backed history with live "Now Playing" indicator and total watch time stats.
-- **System Tray** — Minimizes to tray with startup-on-boot option. Less than 50MB RAM footprint.
+- **System Tray & Registry Startup** — Minimizes to tray and uses a clean, silent Windows Registry injection for automatic booting on PC startup without flashing console windows. Less than 50MB RAM footprint.
 - **Low-End CPU Hibernation** — Automatically enters a 12-second idle poll when VLC is closed, conserving resources.
 
 ---
