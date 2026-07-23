@@ -223,7 +223,7 @@ body {
 /* ===== Content Area ===== */
 .content-area {
     flex-grow: 1;
-    padding: 2rem 2.5rem;
+    padding: 2rem 2.5rem 4rem 2.5rem;
     overflow-y: auto;
     position: relative;
 }
@@ -659,9 +659,9 @@ body {
 
 /* ===== Developer Console ===== */
 .dev-console {
-    position: absolute;
+    position: fixed;
     bottom: 0;
-    left: 0;
+    left: 220px;
     right: 0;
     background: #0f0f13;
     border-top: 1px solid var(--border);
