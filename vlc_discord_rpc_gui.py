@@ -24,9 +24,10 @@ from PIL import Image
 
 CONFIG_FILE = "config.json"
 CACHE_FILE = "metadata_cache.json"
+HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.0"
+CURRENT_VERSION = "4.1"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -253,10 +254,68 @@ class RPCBackend:
         self.stop_event = threading.Event()
         self.current_watch_duration = 0
         self.anilist_logs = []
+        self.history = self.load_history()
         self.setup_database()
         self.metadata_cache = self.load_metadata_cache()
         self.worker_thread = threading.Thread(target=self.rpc_worker, daemon=True)
         self.worker_thread.start()
+
+    def log(self, msg):
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        formatted = f"[{timestamp}] {msg}"
+        print(formatted)
+        if self.window:
+            try:
+                safe_msg = formatted.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'")
+                self.window.evaluate_js(f"if(window.addLog) window.addLog('{safe_msg}');")
+            except Exception:
+                pass
+
+    def load_history(self):
+        if getattr(sys, 'frozen', False):
+            application_path = os.path.dirname(sys.executable)
+        else:
+            application_path = os.path.dirname(os.path.abspath(__file__))
+        history_path = os.path.join(application_path, HISTORY_FILE)
+        
+        if not os.path.exists(history_path):
+            return []
+        try:
+            with open(history_path, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    def save_history(self):
+        if getattr(sys, 'frozen', False):
+            application_path = os.path.dirname(sys.executable)
+        else:
+            application_path = os.path.dirname(os.path.abspath(__file__))
+        history_path = os.path.join(application_path, HISTORY_FILE)
+        try:
+            with open(history_path, "w") as f:
+                json.dump(self.history, f, indent=4)
+        except Exception:
+            pass
+
+    def add_to_history(self, title, episode_str, is_music, duration_seconds):
+        if duration_seconds < 60:
+            return  # don't log if watched for less than a minute
+        
+        media_type = self.state_data.get("media_type", "movie")
+        if is_music:
+            media_type = "music"
+            
+        entry = {
+            "title": title,
+            "episode": episode_str,
+            "media_type": media_type,
+            "duration": duration_seconds,
+            "timestamp": int(time.time())
+        }
+        self.history.append(entry)
+        self.save_history()
+        self.log(f"Logged to history: {title} ({duration_seconds}s)")
         threading.Thread(target=self.check_for_updates, daemon=True).start()
 
     def anilist_log(self, msg):
@@ -1037,25 +1096,32 @@ class RPCBackend:
                                 self.state_data["metadata"] = self.metadata_cache[cache_key]
                                 self.state_data["local_image_path"] = self.state_data["metadata"].get("image_url")
                                 self.state_data["status_message"] = "Metadata loaded from cache."
+                                self.log(f"Playing '{cleaned_title}' (Metadata from cache)")
                             else:
                                 self.state_data["metadata"] = None
                                 self.state_data["local_image_path"] = None
                                 self.state_data["status_message"] = "Fetching metadata..."
+                                self.log(f"Playing '{cleaned_title}' (Fetching metadata...)")
                                 fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"])
                                 threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
                         else:
                             self.state_data["metadata"] = None
                             self.state_data["episode_str"] = ""
                             self.state_data["local_image_path"] = None
+                            self.log("VLC stopped playback.")
                 else:
                     self.state_data["vlc_connected"] = False
 
             except requests.exceptions.RequestException:
+                if self.state_data.get("vlc_connected"):
+                    self.log("VLC connection lost.")
                 # VLC is unreachable — mark disconnected and hibernate briefly
                 self.state_data["vlc_connected"] = False
                 time.sleep(5)
                 # Fall through to Discord reconnect logic below
-            except Exception:
+            except Exception as e:
+                if self.state_data.get("vlc_connected"):
+                    self.log(f"VLC error: {e}")
                 self.state_data["vlc_connected"] = False
 
             desired_client_id = self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID
@@ -1067,6 +1133,7 @@ class RPCBackend:
                     pass
                 rpc = None
                 self.state_data["rpc_connected"] = False
+                self.log(f"Closing Discord RPC (Client ID changed to {desired_client_id})")
 
             if not rpc and time.time() >= rpc_reconnect_at:
                 try:
@@ -1075,11 +1142,14 @@ class RPCBackend:
                     current_client_id = desired_client_id
                     self.state_data["rpc_connected"] = True
                     self.state_data["status_message"] = "Connected to Discord."
+                    self.log(f"Connected to Discord RPC (Client ID: {desired_client_id})")
                     rpc_backoff = 1       # reset on successful connect
                     rpc_reconnect_at = 0.0
                 except Exception:
                     rpc = None
                     current_client_id = None
+                    if self.state_data.get("rpc_connected", True):
+                        self.log("Discord not found — retrying...")
                     self.state_data["rpc_connected"] = False
                     self.state_data["status_message"] = "Discord not found — retrying..."
                     rpc_reconnect_at = time.time() + rpc_backoff
@@ -1365,6 +1435,36 @@ class WebApi:
         
     def get_state(self):
         return self.backend.state_data
+        
+    def get_stats(self):
+        history = self.backend.history
+        stats = {
+            "total_watch_time": 0,
+            "media_types": {"anime": 0, "movie": 0, "tv_show": 0, "music": 0},
+            "recent_activity": []
+        }
+        
+        for entry in history:
+            dur = entry.get("duration", 0)
+            stats["total_watch_time"] += dur
+            mtype = entry.get("media_type", "movie")
+            if mtype in stats["media_types"]:
+                stats["media_types"][mtype] += dur
+            else:
+                stats["media_types"][mtype] = dur
+                
+        # Get last 7 days of activity
+        now = time.time()
+        for i in range(7):
+            stats["recent_activity"].append(0)
+            
+        for entry in history:
+            ts = entry.get("timestamp", 0)
+            days_ago = int((now - ts) / 86400)
+            if 0 <= days_ago < 7:
+                stats["recent_activity"][6 - days_ago] += entry.get("duration", 0)
+                
+        return stats
         
     def save_config(self, new_config):
         try:

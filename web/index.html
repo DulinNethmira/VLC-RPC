@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/png" href="icon.png">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="ambient-glow glow-orange"></div>
@@ -31,7 +32,7 @@
                     <i class="fas fa-layer-group"></i> Dashboard
                 </a>
                 <a href="#" class="nav-item" data-tab="tab-history">
-                    <i class="fas fa-history"></i> History
+                    <i class="fas fa-chart-pie"></i> Stats & History
                 </a>
                 <a href="#" class="nav-item" data-tab="tab-preferences">
                     <i class="fas fa-sliders-h"></i> Preferences
@@ -67,55 +68,88 @@
                     <button class="action-btn" onclick="refreshStatus()"><i class="fas fa-bolt"></i> Force Sync</button>
                 </header>
 
-                <div class="hero-card" id="now-playing-hero">
-                    <div class="hero-bg-blur" id="hero-bg-blur"></div>
-                    <div class="hero-content">
-                        <!-- Idle State -->
-                        <div class="idle-state" id="idle-state">
-                            <i class="fas fa-ghost"></i>
-                            <h3>Nothing is playing right now.</h3>
-                            <p>Fire up VLC Media Player to bring this space to life.</p>
-                        </div>
+                <div class="dashboard-split" style="display: flex; gap: 1.5rem; align-items: stretch;">
+                    
+                    <!-- Left: Hero Card -->
+                    <div class="hero-card" id="now-playing-hero" style="flex: 2;">
+                        <div class="hero-bg-blur" id="hero-bg-blur"></div>
+                        <div class="hero-content">
+                            <!-- Idle State -->
+                            <div class="idle-state" id="idle-state">
+                                <i class="fas fa-ghost"></i>
+                                <h3>Nothing is playing right now.</h3>
+                                <p>Fire up VLC Media Player to bring this space to life.</p>
+                            </div>
 
-                        <!-- Active State -->
-                        <div class="active-state" id="active-state" style="display: none;">
-                            <img src="" alt="Cover" class="hero-cover" id="hero-cover">
-                            <div class="hero-info">
-                                <div class="badges-row" style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center;">
-                                    <span class="hero-badge" id="hero-badge">Watching</span>
-                                    <span class="hero-badge" id="quality-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
-                                    <span class="hero-badge" id="audio-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
-                                </div>
-                                <h2 class="hero-title" id="hero-title">Video Title</h2>
-                                <p class="hero-subtitle" id="hero-subtitle">Season 1 Episode 1</p>
-                                
-                                <div class="progress-wrapper">
-                                    <span class="time-text" id="time-current">0:00</span>
-                                    <div class="progress-track">
-                                        <div class="progress-fill" id="progress-fill"></div>
+                            <!-- Active State -->
+                            <div class="active-state" id="active-state" style="display: none;">
+                                <img src="" alt="Cover" class="hero-cover" id="hero-cover">
+                                <div class="hero-info">
+                                    <div class="badges-row" style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center;">
+                                        <span class="hero-badge" id="hero-badge">Watching</span>
+                                        <span class="hero-badge" id="quality-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
+                                        <span class="hero-badge" id="audio-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
                                     </div>
-                                    <span class="time-text" id="time-total">24:00</span>
+                                    <h2 class="hero-title" id="hero-title">Video Title</h2>
+                                    <p class="hero-subtitle" id="hero-subtitle">Season 1 Episode 1</p>
+                                    
+                                    <div class="progress-wrapper">
+                                        <span class="time-text" id="time-current">0:00</span>
+                                        <div class="progress-track">
+                                            <div class="progress-fill" id="progress-fill"></div>
+                                        </div>
+                                        <span class="time-text" id="time-total">24:00</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </div>
+
+                    <!-- Right: Discord Preview -->
+                    <div class="discord-preview-card" style="flex: 1; background: #2b2d31; border-radius: 8px; padding: 1rem; border: 1px solid #1e1f22; display: flex; flex-direction: column;">
+                        <div style="font-size: 0.75rem; font-weight: 700; color: #b5bac1; margin-bottom: 12px; text-transform: uppercase;">Playing a game</div>
+                        
+                        <div style="display: flex; gap: 12px;">
+                            <div style="position: relative; width: 64px; height: 64px;">
+                                <img id="dc-large-img" src="icon.png" style="width: 100%; height: 100%; border-radius: 8px; object-fit: cover;">
+                                <div id="dc-small-img-container" style="position: absolute; bottom: -4px; right: -4px; width: 24px; height: 24px; background: #2b2d31; border-radius: 50%; display: flex; align-items: center; justify-content: center; display: none;">
+                                    <img id="dc-small-img" src="icon.png" style="width: 20px; height: 20px; border-radius: 50%;">
+                                </div>
+                            </div>
+                            
+                            <div style="display: flex; flex-direction: column; overflow: hidden; white-space: nowrap;">
+                                <div style="font-weight: 700; color: #f2f3f5; font-size: 0.9rem; margin-bottom: 2px;">VLC Media Player</div>
+                                <div id="dc-details" style="color: #dbdee1; font-size: 0.85rem; text-overflow: ellipsis; overflow: hidden;">Waiting for media...</div>
+                                <div id="dc-state" style="color: #dbdee1; font-size: 0.85rem; text-overflow: ellipsis; overflow: hidden;"></div>
+                                <div id="dc-time" style="color: #dbdee1; font-size: 0.85rem;"></div>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </div>
 
             <!-- History Tab -->
             <div id="tab-history" class="tab-content" style="display: none;">
-                <h2>Watch History</h2>
-                <div class="stats-row">
-                    <div class="stat-card">
-                        <i class="fas fa-clock"></i>
-                        <div>
-                            <h4>Total Watch Time</h4>
-                            <span id="total-time">0h 0m</span>
-                        </div>
+                <header class="page-header">
+                    <h1>Stats & History</h1>
+                    <button class="action-btn" onclick="fetchStats()"><i class="fas fa-sync"></i> Refresh Data</button>
+                </header>
+                
+                <div class="stats-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
+                    <div class="glass-card" style="display: flex; flex-direction: column; align-items: center;">
+                        <h3>Total Watch Time</h3>
+                        <div id="total-time-large" style="font-size: 2.5rem; font-weight: 700; color: var(--accent-blurple); margin: 1rem 0;">0h 0m</div>
+                    </div>
+                    <div class="glass-card">
+                        <h3>Media Breakdown</h3>
+                        <canvas id="mediaPieChart" style="max-height: 200px; margin-top: 1rem;"></canvas>
                     </div>
                 </div>
-                <div class="history-list" id="history-list">
-                    <!-- History items injected here -->
+
+                <div class="glass-card">
+                    <h3>Weekly Watch Activity (Minutes)</h3>
+                    <canvas id="weeklyBarChart" style="max-height: 250px; margin-top: 1rem;"></canvas>
                 </div>
             </div>
 
@@ -236,6 +270,16 @@
                     <div id="anilog-list" style="font-family: 'Courier New', monospace; font-size: 12px; color: #c8d3f0; padding: 16px; max-height: 440px; overflow-y: auto; display: flex; flex-direction: column-reverse;">
                         <p style="color: #555; text-align: center; margin: 40px 0;">No AniList activity yet. Start playing an anime episode to see logs here.</p>
                     </div>
+                </div>
+            </div>
+            <!-- Interactive Developer Console -->
+            <div id="dev-console" class="dev-console collapsed">
+                <div class="console-header" onclick="toggleConsole()">
+                    <span><i class="fas fa-terminal"></i> Live Logs</span>
+                    <i class="fas fa-chevron-up" id="console-toggle-icon"></i>
+                </div>
+                <div class="console-body" id="console-body">
+                    <!-- Logs injected here -->
                 </div>
             </div>
         </main>
