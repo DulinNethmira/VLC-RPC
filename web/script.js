@@ -130,7 +130,8 @@ function saveConfig() {
         anilist_client_secret: document.getElementById('anilist_client_secret').value,
         discord_app_secret: document.getElementById('discord_app_secret').value,
         discord_app_id: document.getElementById('discord_app_id').value,
-        auto_sync_threshold: parseInt(document.getElementById('auto_sync_threshold').value) || 90
+        auto_sync_threshold: parseInt(document.getElementById('auto_sync_threshold').value) || 90,
+        gemini_api_key: document.getElementById('gemini_api_key').value
     };
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.save_config(config).then(function(response) {
@@ -247,6 +248,7 @@ window.addEventListener('pywebviewready', function() {
         document.getElementById('discord_app_secret').value = config.discord_client_secret || config.discord_app_secret || '';
         document.getElementById('discord_app_id').value = config.discord_app_id || config.discord_client_id || '';
         document.getElementById('auto_sync_threshold').value = config.auto_sync_threshold || 90;
+        document.getElementById('gemini_api_key').value = config.gemini_api_key || '';
     });
     
     document.getElementById('btn-anilist-login').addEventListener('click', (e) => {
@@ -268,7 +270,7 @@ window.addEventListener('pywebviewready', function() {
                 const dlBtn = document.getElementById('update-download-btn');
                 const btnVer = document.getElementById('update-btn-ver');
 
-                if (verLabel) verLabel.textContent = `v${state.update_version} is available — you have v${window._currentVersion || '?'}`;
+                if (verLabel) verLabel.textContent = `v${state.update_version} is available — you have v${state.current_version || '?'}`;
                 if (changelogBox) changelogBox.textContent = state.update_changelog || 'See GitHub for details.';
                 if (btnVer) btnVer.textContent = state.update_version;
                 if (dlBtn) {
@@ -328,8 +330,7 @@ window.addEventListener('pywebviewready', function() {
         }).catch(err => {});
     }, 1500);
 
-    // Expose current version for the modal label
-    window._currentVersion = '3.1';
+    // Backend state now handles version.
 });
 // ===== AniList Logs =====
 let aniLogInterval = null;
