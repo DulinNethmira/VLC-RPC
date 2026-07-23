@@ -49,6 +49,9 @@ def clean_title(title):
     title = str(title or "")
     title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
     title = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
+    
+    # Un-camelcase words for messy filenames (e.g., "ReZero" -> "Re Zero")
+    title = re.sub(r'([a-z])([A-Z])', r'\1 \2', title)
 
     loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\-:&!,]+?)[\s\.\-_]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
     if loose_ep:
@@ -197,6 +200,7 @@ class RPCBackend:
         self.config.update(load_config())
         self.metadata_cache = {}
         self.state_data = {
+            "current_version": CURRENT_VERSION,
             "vlc_connected": False,
             "rpc_connected": False,
             "status_message": "Initializing...",
@@ -389,9 +393,9 @@ class RPCBackend:
                     if t.get("romaji"):  cands.append(_normalize(t["romaji"]))
                     for syn in (media.get("synonyms") or []):
                         cands.append(_normalize(syn))
-                    # Remove extra spaces for even fuzzier matching
-                    search_compact = re.sub(r'\s+', ' ', search_normalized)
-                    return any(search_compact in re.sub(r'\s+', ' ', c) or re.sub(r'\s+', ' ', c) in search_compact for c in cands)
+                    # Remove all spaces for even fuzzier matching (handles missing spaces)
+                    search_compact = re.sub(r'\s+', '', search_normalized)
+                    return any(search_compact in re.sub(r'\s+', '', c) or re.sub(r'\s+', '', c) in search_compact for c in cands)
 
                 mlc = (lists_data.get("data") or {}).get("MediaListCollection") or {}
                 for lst in mlc.get("lists", []):
