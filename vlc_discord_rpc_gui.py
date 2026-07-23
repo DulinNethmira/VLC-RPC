@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.2.1"
+CURRENT_VERSION = "4.2.2"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -48,7 +48,7 @@ DEFAULT_CONFIG = {
 def query_gemini_title(filename, api_key):
     """Use Gemini REST API with grounding to get the exact official anime/media title and episode."""
     if not api_key: return None, None
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
     prompt = (
         f"You are a media title expert with internet access. Given this video filename, "
         f"identify the EXACT official title of the anime/movie/show, including all special punctuation "
