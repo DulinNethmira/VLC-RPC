@@ -35,8 +35,11 @@ VLC RPC seamlessly connects your VLC Media Player to Discord. It shows your frie
 - **Real-time AniList Logs** — Dedicated in-app log panel shows every sync decision with color-coded entries for debugging.
 
 ### 🖥️ Dashboard & Tracking
-- **Modern WebView UI** — Beautiful glassmorphism design with ambient glow effects, built with the Outfit font family.
-- **Live Watch History** — SQLite-backed history with live "Now Playing" indicator and total watch time stats.
+- **Modern WebView UI** — Beautiful glassmorphism design with ambient glow effects, 3D hover animations, and built with the Outfit font family.
+- **Dynamic Theming** — The UI automatically extracts the dominant color from your media's poster art to dynamically theme the interface and background glow.
+- **Live Watch History & Stats** — SQLite-backed history with live "Now Playing" indicator, aggregate watch time metrics, and graphical charts (via Chart.js) showing your media breakdown and weekly activity.
+- **Live Discord Preview** — See exactly how your rich presence will look on Discord inside the app in real-time.
+- **Interactive Developer Console** — Built-in terminal drawer that streams internal backend logs and RPC events in real-time for easy debugging.
 - **System Tray & Registry Startup** — Minimizes to tray and uses a clean, silent Windows Registry injection for automatic booting on PC startup without flashing console windows. Less than 50MB RAM footprint.
 - **Low-End CPU Hibernation** — Automatically enters a 12-second idle poll when VLC is closed, conserving resources.
 

@@ -105,10 +105,38 @@ window.updateState = function(state) {
         const pct = totalSecs > 0 ? (currentSecs / totalSecs) * 100 : 0;
         document.getElementById('progress-fill').style.width = pct + '%';
 
+        // Update Discord Preview
+        document.getElementById('dc-large-img').src = imgUrl || 'icon.png';
+        if (imgUrl) {
+            document.getElementById('dc-small-img-container').style.display = 'flex';
+            document.getElementById('dc-small-img').src = 'icon.png';
+        } else {
+            document.getElementById('dc-small-img-container').style.display = 'none';
+        }
+        
+        document.getElementById('dc-details').textContent = displayTitle;
+        document.getElementById('dc-state').textContent = state.episode_str || (isMusic ? 'by ' + state.artist : '');
+        
+        if (state.playback_state === 'playing' && totalSecs > 0) {
+            const remaining = totalSecs - currentSecs;
+            document.getElementById('dc-time').textContent = formatTime(remaining) + ' left';
+        } else if (state.playback_state === 'paused') {
+            document.getElementById('dc-time').textContent = 'Paused';
+        } else {
+            document.getElementById('dc-time').textContent = formatTime(currentSecs) + ' elapsed';
+        }
+
     } else {
         idleState.style.display = 'flex';
         activeState.style.display = 'none';
         heroBgBlur.style.opacity = '0';
+        
+        // Reset Discord Preview
+        document.getElementById('dc-large-img').src = 'icon.png';
+        document.getElementById('dc-small-img-container').style.display = 'none';
+        document.getElementById('dc-details').textContent = 'Waiting for media...';
+        document.getElementById('dc-state').textContent = '';
+        document.getElementById('dc-time').textContent = '';
     }
 }
 
@@ -382,3 +410,100 @@ function clearAniLogs() {
     const el = document.getElementById('anilog-list');
     if (el) el.innerHTML = '<p style="color:#555; text-align:center; margin:40px 0;">Logs cleared.</p>';
 }
+
+// ===== Interactive Developer Console =====
+window.addLog = function(msg) {
+    const body = document.getElementById('console-body');
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    line.textContent = msg;
+    body.appendChild(line);
+    body.scrollTop = body.scrollHeight;
+};
+
+window.toggleConsole = function() {
+    const consoleEl = document.getElementById('dev-console');
+    const icon = document.getElementById('console-toggle-icon');
+    if (consoleEl.classList.contains('collapsed')) {
+        consoleEl.classList.remove('collapsed');
+        icon.className = 'fas fa-chevron-down';
+    } else {
+        consoleEl.classList.add('collapsed');
+        icon.className = 'fas fa-chevron-up';
+    }
+};
+
+// ===== Advanced Stats & Graphs =====
+let mediaPieChart = null;
+let weeklyBarChart = null;
+
+window.fetchStats = function() {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.get_stats().then(stats => {
+            document.getElementById('total-time-large').textContent = formatTime(stats.total_watch_time);
+            
+            // Render Pie Chart
+            const pieCtx = document.getElementById('mediaPieChart').getContext('2d');
+            if (mediaPieChart) mediaPieChart.destroy();
+            mediaPieChart = new Chart(pieCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Anime', 'Movies', 'TV Shows', 'Music'],
+                    datasets: [{
+                        data: [
+                            stats.media_types.anime || 0,
+                            stats.media_types.movie || 0,
+                            stats.media_types.tv_show || 0,
+                            stats.media_types.music || 0
+                        ],
+                        backgroundColor: ['#5865F2', '#e8772e', '#43b581', '#f04747'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'right', labels: { color: '#eaeaf0' } }
+                    }
+                }
+            });
+
+            // Render Bar Chart
+            const barCtx = document.getElementById('weeklyBarChart').getContext('2d');
+            if (weeklyBarChart) weeklyBarChart.destroy();
+            const days = ['6 Days Ago', '5 Days Ago', '4 Days Ago', '3 Days Ago', '2 Days Ago', 'Yesterday', 'Today'];
+            weeklyBarChart = new Chart(barCtx, {
+                type: 'bar',
+                data: {
+                    labels: days,
+                    datasets: [{
+                        label: 'Watch Time (Minutes)',
+                        data: stats.recent_activity.map(s => Math.round(s / 60)),
+                        backgroundColor: '#5865F2',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { ticks: { color: '#6e6e82' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                        x: { ticks: { color: '#6e6e82' }, grid: { display: false } }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        });
+    }
+};
+
+// Hook tab switching to fetch stats
+document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+        if (item.dataset.tab === 'tab-history') {
+            fetchStats();
+        }
+    });
+});
+
