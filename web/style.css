@@ -36,26 +36,35 @@ body {
 /* ===== Ambient Background Glow ===== */
 .ambient-glow {
     position: fixed;
-    width: 400px;
-    height: 400px;
+    width: 500px;
+    height: 500px;
     border-radius: 50%;
     filter: blur(120px);
-    opacity: 0.08;
+    opacity: 0.12;
     pointer-events: none;
     z-index: 0;
+    transition: background 1.5s ease;
+    animation: pulseGlow 8s infinite alternate ease-in-out;
+}
+
+@keyframes pulseGlow {
+    0% { transform: scale(1) translate(0, 0); opacity: 0.10; }
+    50% { transform: scale(1.1) translate(20px, 10px); opacity: 0.16; }
+    100% { transform: scale(0.95) translate(-10px, -20px); opacity: 0.12; }
 }
 
 .glow-orange {
     background: var(--glow-color);
-    top: -100px;
-    left: -100px;
-    transition: background 1.5s ease;
+    top: -150px;
+    left: -150px;
 }
 
 .glow-blurple {
-    background: var(--accent-blurple);
-    bottom: -150px;
-    right: -100px;
+    background: var(--glow-color);
+    bottom: -200px;
+    right: -150px;
+    animation-delay: -4s;
+    opacity: 0.08;
 }
 
 /* ===== Loader ===== */
@@ -287,6 +296,12 @@ body {
     min-height: 260px;
     overflow: hidden;
     backdrop-filter: blur(12px);
+    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s ease;
+}
+
+.hero-card:hover {
+    transform: translateY(-4px) scale(1.01);
+    box-shadow: 0 20px 40px rgba(0,0,0,0.4);
 }
 
 .hero-bg-blur {
@@ -357,11 +372,12 @@ body {
     object-fit: cover;
     background: var(--bg-surface);
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
-    transition: transform 0.3s ease;
+    transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.5s ease;
 }
 
-.hero-cover:hover {
-    transform: scale(1.03);
+.hero-card:hover .hero-cover {
+    transform: scale(1.06) rotate(1.5deg);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6);
 }
 
 .hero-info {
