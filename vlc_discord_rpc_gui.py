@@ -39,8 +39,32 @@ DEFAULT_CONFIG = {
     "small_image_key": "play",
     "small_image_text": "Playing",
     "small_image_paused_key": "pause",
-    "small_image_paused_text": "Paused"
+    "small_image_paused_text": "Paused",
+    "gemini_api_key": ""
 }
+
+def query_gemini_title(filename, api_key):
+    """Use Gemini REST API to extract official anime title and episode."""
+    if not api_key: return None, None
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    prompt = f"You are an anime metadata extractor. Extract the official English or Romaji anime title and episode number from this video filename. Do not include seasons in the title if it's not part of the official name. Return strictly JSON: {{\"title\": \"<title>\", \"episode\": <number_or_null>}}. Filename: {filename}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"response_mime_type": "application/json"}
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            parsed = json.loads(text)
+            title = parsed.get("title")
+            ep = parsed.get("episode")
+            ep_str = f"Episode {ep}" if ep else ""
+            return title, ep_str
+    except Exception as e:
+        print(f"Gemini AI Error: {e}")
+    return None, None
 
 def clean_title(title):
     """Parse a raw filename into (display_title, episode_str).
@@ -199,6 +223,7 @@ class RPCBackend:
         self.config = DEFAULT_CONFIG.copy()
         self.config.update(load_config())
         self.metadata_cache = {}
+        self.gemini_cache = {}
         self.state_data = {
             "current_version": CURRENT_VERSION,
             "vlc_connected": False,
@@ -943,7 +968,27 @@ class RPCBackend:
                         
                     # VLC often keeps a stale/generic title tag while filename changes.
                     # Parse filename first so episode-to-episode switches are detected.
-                    cleaned_title, episode_str = clean_title(file_name or self.state_data["title"])
+                    raw_name = file_name or self.state_data["title"]
+                    gemini_key = self.config.get("gemini_api_key", "").strip()
+                    cleaned_title, episode_str = None, None
+
+                    if gemini_key:
+                        if raw_name not in self.gemini_cache:
+                            self.anilist_log(f"[Gemini AI] Analyzing filename...")
+                            t, e = query_gemini_title(raw_name, gemini_key)
+                            if t:
+                                self.gemini_cache[raw_name] = (t, e)
+                                self.anilist_log(f"[Gemini AI] Match: {t} {e}")
+                            else:
+                                self.gemini_cache[raw_name] = None
+                        
+                        cached = self.gemini_cache.get(raw_name)
+                        if cached:
+                            cleaned_title, episode_str = cached
+
+                    if not cleaned_title:
+                        cleaned_title, episode_str = clean_title(raw_name)
+
                     if tag_title and not episode_str:
                         alt_title, alt_episode = clean_title(tag_title)
                         if alt_episode:
