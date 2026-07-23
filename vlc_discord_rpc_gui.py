@@ -12,6 +12,7 @@ import asyncio
 from io import BytesIO
 import sqlite3
 import datetime
+import winreg
 try:
     import guessit
 except ImportError:
@@ -1528,41 +1529,40 @@ def setup_tray():
     old_startup_path = os.path.join(os.environ['APPDATA'], 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'VLC_Discord_RP.bat')
     startup_path = os.path.join(os.environ['APPDATA'], 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'VLCRPC_Startup.bat')
     
-    # Clean up legacy startup file
-    if os.path.exists(old_startup_path):
-        try: os.remove(old_startup_path)
-        except Exception: pass
-    
-    def is_startup_enabled(item):
-        return os.path.exists(startup_path)
-        
+    # Clean up legacy startup files
+    for path in [old_startup_path, startup_path]:
+        if os.path.exists(path):
+            try: os.remove(path)
+            except Exception: pass
+            
+    def is_startup_enabled(item=None):
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ)
+            winreg.QueryValueEx(key, "VLC_RPC")
+            winreg.CloseKey(key)
+            return True
+        except FileNotFoundError:
+            return False
+
     def toggle_startup(icon, item):
-        if is_startup_enabled(item):
-            try:
-                os.remove(startup_path)
-            except Exception:
-                pass
-        else:
-            try:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
+            if is_startup_enabled():
+                try: winreg.DeleteValue(key, "VLC_RPC")
+                except FileNotFoundError: pass
+            else:
+                exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
                 if getattr(sys, 'frozen', False):
-                    # PyInstaller bundle
-                    python_exe = sys.executable
-                    script_path = ""
+                    cmd = f'"{exe_path}" --minimized'
                 else:
                     python_exe = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
                     if not os.path.exists(python_exe):
                         python_exe = sys.executable
-                    script_path = os.path.abspath(__file__)
-                
-                working_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
-                
-                with open(startup_path, 'w') as f:
-                    if script_path:
-                        f.write(f'@echo off\ncd /d "{working_dir}"\nstart "" "{python_exe}" "{script_path}" --minimized\n')
-                    else:
-                        f.write(f'@echo off\ncd /d "{working_dir}"\nstart "" "{python_exe}" --minimized\n')
-            except Exception:
-                pass
+                    cmd = f'"{python_exe}" "{exe_path}" --minimized'
+                winreg.SetValueEx(key, "VLC_RPC", 0, winreg.REG_SZ, cmd)
+            winreg.CloseKey(key)
+        except Exception as e:
+            print(f"Startup toggle failed: {e}")
 
     def is_minimize_to_tray(item):
         return backend.config.get('minimize_to_tray', True)
