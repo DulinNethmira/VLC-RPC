@@ -114,6 +114,7 @@ window.updateState = function(state) {
             document.getElementById('dc-small-img-container').style.display = 'none';
         }
         
+        document.getElementById('dc-activity-type').textContent = isMusic ? 'Listening to' : 'Watching';
         document.getElementById('dc-details').textContent = displayTitle;
         document.getElementById('dc-state').textContent = state.episode_str || (isMusic ? 'by ' + state.artist : '');
         
