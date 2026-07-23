@@ -26,7 +26,7 @@ CONFIG_FILE = "config.json"
 CACHE_FILE = "metadata_cache.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "3.5"
+CURRENT_VERSION = "3.6"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
