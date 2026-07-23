@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.1.1"
+CURRENT_VERSION = "4.2"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -46,16 +46,25 @@ DEFAULT_CONFIG = {
 }
 
 def query_gemini_title(filename, api_key):
-    """Use Gemini REST API to extract official anime title and episode."""
+    """Use Gemini REST API with grounding to get the exact official anime/media title and episode."""
     if not api_key: return None, None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-    prompt = f"You are an anime metadata extractor. Extract the official English or Romaji anime title and episode number from this video filename. Do not include seasons in the title if it's not part of the official name. Return strictly JSON: {{\"title\": \"<title>\", \"episode\": <number_or_null>}}. Filename: {filename}"
+    prompt = (
+        f"You are a media title expert with internet access. Given this video filename, "
+        f"identify the EXACT official title of the anime/movie/show, including all special punctuation "
+        f"(colons, dashes, exclamation marks, etc. that are part of the official title). "
+        f"For example: 'Re:ZERO -Starting Life in Another World-' not 'Re Zero Starting Life in Another World'. "
+        f"Also extract the episode number if present. "
+        f"Return ONLY valid JSON: {{\"title\": \"<exact official title>\", \"episode\": <number_or_null>}}. "
+        f"Filename: {filename}"
+    )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"response_mime_type": "application/json"}
+        "generationConfig": {"response_mime_type": "application/json"},
+        "tools": [{"google_search": {}}]
     }
     try:
-        r = requests.post(url, json=payload, timeout=5)
+        r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
             data = r.json()
             text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
@@ -64,6 +73,20 @@ def query_gemini_title(filename, api_key):
             ep = parsed.get("episode")
             ep_str = f"Episode {ep}" if ep else ""
             return title, ep_str
+        # Fallback: retry without grounding tool if grounding not supported
+        payload2 = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"response_mime_type": "application/json"}
+        }
+        r2 = requests.post(url, json=payload2, timeout=8)
+        if r2.status_code == 200:
+            data2 = r2.json()
+            text2 = data2.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            parsed2 = json.loads(text2)
+            title2 = parsed2.get("title")
+            ep2 = parsed2.get("episode")
+            ep_str2 = f"Episode {ep2}" if ep2 else ""
+            return title2, ep_str2
     except Exception as e:
         print(f"Gemini AI Error: {e}")
     return None, None
@@ -909,12 +932,17 @@ class RPCBackend:
                 metadata = self.fetch_itunes_metadata(search_title, artist)
             elif media_type == "movie":
                 metadata = self.fetch_omdb_metadata(search_title, year)
+                # Fallback: could be an anime OVA/movie (e.g. Re:ZERO Memory Snow)
+                if not metadata or not metadata.get("image_url"):
+                    metadata = self.fetch_jikan_metadata(search_title)
             elif media_type == "anime":
                 metadata = self.fetch_jikan_metadata(search_title)
             elif media_type == "tv_show":
                 metadata = self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num)
                 if not metadata or not metadata.get("image_url"):
                     metadata = self.fetch_omdb_metadata(search_title, year)
+                if not metadata or not metadata.get("image_url"):
+                    metadata = self.fetch_jikan_metadata(search_title)
 
             if not metadata or not metadata.get("image_url"):
                 metadata = self.fetch_wikipedia_metadata(search_title)
@@ -1329,8 +1357,9 @@ class RPCBackend:
 
     def fetch_jikan_metadata(self, title):
         try:
+            # First try exact title
             url = f"https://api.jikan.moe/v4/anime?q={urllib.parse.quote(title)}&limit=1"
-            r = requests.get(url, timeout=3)
+            r = requests.get(url, timeout=5)
             if r.status_code == 200:
                 data = r.json()
                 results = data.get("data", [])
@@ -1347,6 +1376,27 @@ class RPCBackend:
                         "page_url": anime.get("url"),
                         "total_episodes": anime.get("episodes", 0)
                     }
+            # Retry with first 3 words of title (helps with long titles like "Re:ZERO - Starting...")
+            short = ' '.join(title.split()[:3])
+            if short != title:
+                url2 = f"https://api.jikan.moe/v4/anime?q={urllib.parse.quote(short)}&limit=5"
+                r2 = requests.get(url2, timeout=5)
+                if r2.status_code == 200:
+                    data2 = r2.json()
+                    results2 = data2.get("data", [])
+                    for anime in results2:
+                        img_url = None
+                        if anime.get("images") and anime["images"].get("jpg"):
+                            img_url = anime["images"]["jpg"].get("large_image_url")
+                        if img_url:
+                            return {
+                                "image_url": img_url,
+                                "rating": anime.get("score"),
+                                "genres": [g.get("name") for g in anime.get("genres", []) if g.get("name")],
+                                "description": f"Anime | {anime.get('type', '')}",
+                                "page_url": anime.get("url"),
+                                "total_episodes": anime.get("episodes", 0)
+                            }
         except Exception:
             pass
         return None

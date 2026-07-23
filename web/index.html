@@ -4,11 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VLC RPC</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="fonts/fonts.css" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="fonts/fa.min.css">
     <link rel="icon" type="image/png" href="icon.png">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="chart.min.js"></script>
 </head>
 <body>
     <div class="ambient-glow glow-orange"></div>
@@ -68,10 +68,10 @@
                     <button class="action-btn" onclick="refreshStatus()"><i class="fas fa-bolt"></i> Force Sync</button>
                 </header>
 
-                <div class="dashboard-split" style="display: flex; gap: 1.5rem; align-items: stretch;">
+                <div class="dashboard-split" style="display: flex; flex-direction: column; gap: 1.5rem;">
                     
-                    <!-- Left: Hero Card -->
-                    <div class="hero-card" id="now-playing-hero" style="flex: 2;">
+                    <!-- Now Playing Hero Card -->
+                    <div class="hero-card" id="now-playing-hero">
                         <div class="hero-bg-blur" id="hero-bg-blur"></div>
                         <div class="hero-content">
                             <!-- Idle State -->
@@ -105,8 +105,8 @@
                         </div>
                     </div>
 
-                    <!-- Right: Discord Preview -->
-                    <div class="discord-preview-card" style="flex: 1; background: #2b2d31; border-radius: 8px; padding: 1rem; border: 1px solid #1e1f22; display: flex; flex-direction: column;">
+                    <!-- Discord Preview (below hero) -->
+                    <div class="discord-preview-card" style="background: #2b2d31; border-radius: 8px; padding: 1rem; border: 1px solid #1e1f22; display: flex; flex-direction: column;">
                         <div id="dc-activity-type" style="font-size: 0.75rem; font-weight: 700; color: #b5bac1; margin-bottom: 12px; text-transform: uppercase;">Watching</div>
                         
                         <div style="display: flex; gap: 12px;">
@@ -128,6 +128,7 @@
 
                 </div>
             </div>
+
 
             <!-- History Tab -->
             <div id="tab-history" class="tab-content" style="display: none;">
