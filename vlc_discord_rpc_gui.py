@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.3.1"
+CURRENT_VERSION = "4.3.2"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -225,7 +225,7 @@ Filename:
         "generationConfig": {"response_mime_type": "application/json"}
     }
     try:
-        r = requests.post(url, json=payload, timeout=10)
+        r = requests.post(url, json=payload, timeout=15)
         if r.status_code == 200:
             text = r.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
             return _parse_response(text)
@@ -1048,6 +1048,9 @@ class RPCBackend:
             
             search_title = re.sub(r'\b(19|20)\d{2}\b', '', cleaned_title)
             search_title = re.sub(r'[\(\)]', '', search_title).strip()
+            # CRITICAL: strip 'Season N' that guessit sometimes bakes into the title
+            search_title = re.sub(r'\bSeason\s+\d+\b', '', search_title, flags=re.IGNORECASE).strip()
+            search_title = re.sub(r'\s{2,}', ' ', search_title).strip()
 
             metadata = None
             if media_type == "music":
@@ -1064,6 +1067,7 @@ class RPCBackend:
                 if not metadata or not metadata.get("image_url"):
                     metadata = self.fetch_omdb_metadata(search_title, year)
                 if not metadata or not metadata.get("image_url"):
+                    # Many anime are classified as tv_show — try Jikan as final fallback
                     metadata = self.fetch_jikan_metadata(search_title)
 
             if not metadata or not metadata.get("image_url"):
