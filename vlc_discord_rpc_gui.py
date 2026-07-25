@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.3"
+CURRENT_VERSION = "4.3.1"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -46,8 +46,8 @@ DEFAULT_CONFIG = {
 }
 
 def query_gemini_title(filename, api_key):
-    """Use Gemini REST API with grounding to get the exact official anime/media title and episode."""
-    if not api_key: return None, None
+    """Use Gemini REST API to get the exact official anime/media title and episode."""
+    if not api_key: return None, None, None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
     prompt = f"""
 You are an expert media metadata resolver with internet knowledge.
@@ -128,11 +128,11 @@ If uncertain, return the cleaned best match.
 Examples
 
 Input:
-ReZERO -Starting Life in Another World- Season 2 E08
+ReZERO - Starting Life in Another World Season 2 E08
 
 Output:
 {{
-  "title": "Re:ZERO -Starting Life in Another World-",
+  "title": "Re:ZERO - Starting Life in Another World",
   "season": 2,
   "episode": 8,
   "media_type": "anime"
@@ -210,13 +210,14 @@ Filename:
         title = parsed.get("title")
         season = parsed.get("season")
         ep = parsed.get("episode")
+        media_type_ai = parsed.get("media_type", "")  # e.g. anime, movie, tv, song
         if season and ep:
             ep_str = f"Season {season} Episode {ep}"
         elif ep:
             ep_str = f"Episode {ep}"
         else:
             ep_str = ""
-        return title, ep_str
+        return title, ep_str, media_type_ai
 
     # No grounding tool — the model has built-in knowledge of official titles
     payload = {
@@ -230,7 +231,7 @@ Filename:
             return _parse_response(text)
     except Exception as e:
         print(f"Gemini AI Error: {e}")
-    return None, None
+    return None, None, None
 
 def clean_title(title):
     """Parse a raw filename into (display_title, episode_str).
@@ -461,26 +462,6 @@ class RPCBackend:
                 json.dump(self.history, f, indent=4)
         except Exception:
             pass
-
-    def add_to_history(self, title, episode_str, is_music, duration_seconds):
-        if duration_seconds < 60:
-            return  # don't log if watched for less than a minute
-        
-        media_type = self.state_data.get("media_type", "movie")
-        if is_music:
-            media_type = "music"
-            
-        entry = {
-            "title": title,
-            "episode": episode_str,
-            "media_type": media_type,
-            "duration": duration_seconds,
-            "timestamp": int(time.time())
-        }
-        self.history.append(entry)
-        self.save_history()
-        self.log(f"Logged to history: {title} ({duration_seconds}s)")
-        threading.Thread(target=self.check_for_updates, daemon=True).start()
 
     def anilist_log(self, msg):
         """Append timestamped entry to in-app AniList log and Discord webhook."""
@@ -1203,17 +1184,30 @@ class RPCBackend:
 
                     if gemini_key:
                         if raw_name not in self.gemini_cache:
-                            self.anilist_log(f"[Gemini AI] Analyzing filename...")
-                            t, e = query_gemini_title(raw_name, gemini_key)
-                            if t:
-                                self.gemini_cache[raw_name] = (t, e)
-                                self.anilist_log(f"[Gemini AI] Match: {t} {e}")
-                            else:
-                                self.gemini_cache[raw_name] = None
-                        
+                            # Mark as pending so we don't spawn multiple threads for same file
+                            self.gemini_cache[raw_name] = "pending"
+                            def _run_gemini(name, key):
+                                t, e, mt = query_gemini_title(name, key)
+                                if t:
+                                    self.gemini_cache[name] = (t, e, mt or "")
+                                    self.anilist_log(f"[Gemini AI] Match: {t} {e}")
+                                else:
+                                    self.gemini_cache[name] = None
+                            threading.Thread(target=_run_gemini, args=(raw_name, gemini_key), daemon=True).start()
+
                         cached = self.gemini_cache.get(raw_name)
-                        if cached:
-                            cleaned_title, episode_str = cached
+                        if cached and cached != "pending":
+                            cleaned_title, episode_str = cached[0], cached[1]
+                            ai_media_type = cached[2] if len(cached) > 2 else ""
+                            # Map Gemini media_type to our internal types
+                            if ai_media_type in ("anime", "ova", "special"):
+                                media_type = "anime"
+                            elif ai_media_type == "movie":
+                                media_type = "movie"
+                            elif ai_media_type in ("tv",):
+                                media_type = "tv_show"
+                            elif ai_media_type in ("song", "music_video"):
+                                media_type = "music"
 
                     if not cleaned_title:
                         cleaned_title, episode_str = clean_title(raw_name)
@@ -1224,7 +1218,8 @@ class RPCBackend:
                             episode_str = alt_episode
                         if not cleaned_title:
                             cleaned_title = alt_title
-                    
+
+                    # Only override media_type if Gemini hasn't already set it
                     if media_type != "music" and media_type != "anime":
                         if "Episode" in episode_str or "Season" in episode_str:
                             media_type = "tv_show"
