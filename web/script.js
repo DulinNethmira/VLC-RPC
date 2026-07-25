@@ -469,7 +469,7 @@ window.fetchStats = function() {
                 }
             });
 
-            // Render Bar Chart
+            // Render Bar Chart — recent_activity is already in minutes
             const barCtx = document.getElementById('weeklyBarChart').getContext('2d');
             if (weeklyBarChart) weeklyBarChart.destroy();
             const days = ['6 Days Ago', '5 Days Ago', '4 Days Ago', '3 Days Ago', '2 Days Ago', 'Yesterday', 'Today'];
@@ -479,7 +479,7 @@ window.fetchStats = function() {
                     labels: days,
                     datasets: [{
                         label: 'Watch Time (Minutes)',
-                        data: stats.recent_activity.map(s => Math.round(s / 60)),
+                        data: stats.recent_activity,
                         backgroundColor: '#5865F2',
                         borderRadius: 4
                     }]
@@ -495,9 +495,30 @@ window.fetchStats = function() {
                     }
                 }
             });
+
+            // Render recent history list
+            const historyList = document.getElementById('history-list');
+            if (historyList) {
+                if (!stats.history || stats.history.length === 0) {
+                    historyList.innerHTML = '<p class="empty-state">No history yet. Start watching something!</p>';
+                } else {
+                    historyList.innerHTML = stats.history.map(entry => {
+                        const mins = Math.round(entry.duration / 60);
+                        const label = entry.is_music ? '🎵' : '🎬';
+                        return `<div class="history-entry">
+                            <span class="history-icon">${label}</span>
+                            <div class="history-info">
+                                <span class="history-title">${entry.title}</span>
+                                <span class="history-meta">${entry.episode || ''} &bull; ${mins} min &bull; ${entry.timestamp}</span>
+                            </div>
+                        </div>`;
+                    }).join('');
+                }
+            }
         });
     }
 };
+
 
 // Hook tab switching to fetch stats
 document.querySelectorAll('.nav-item').forEach(item => {

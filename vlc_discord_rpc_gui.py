@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.2.2"
+CURRENT_VERSION = "4.3"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -49,44 +49,185 @@ def query_gemini_title(filename, api_key):
     """Use Gemini REST API with grounding to get the exact official anime/media title and episode."""
     if not api_key: return None, None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
-    prompt = (
-        f"You are a media title expert with internet access. Given this video filename, "
-        f"identify the EXACT official title of the anime/movie/show, including all special punctuation "
-        f"(colons, dashes, exclamation marks, etc. that are part of the official title). "
-        f"For example: 'Re:ZERO -Starting Life in Another World-' not 'Re Zero Starting Life in Another World'. "
-        f"Also extract the episode number if present. "
-        f"Return ONLY valid JSON: {{\"title\": \"<exact official title>\", \"episode\": <number_or_null>}}. "
-        f"Filename: {filename}"
-    )
+    prompt = f"""
+You are an expert media metadata resolver with internet knowledge.
+
+Your task is to identify the ORIGINAL OFFICIAL TITLE of the media represented by the filename.
+
+The filename may contain:
+- Scene release names
+- Fansub group names
+- Release tags
+- Codec names
+- Resolution
+- Audio formats
+- CRC hashes
+- Random punctuation
+- Underscores
+- Dots
+- Missing punctuation
+- Incorrect capitalization
+- Abbreviations
+- Romanized Japanese titles
+- English titles
+- Season/Episode notation
+
+Your job is to reconstruct the OFFICIAL TITLE exactly as it appears on official sources (AniList, MyAnimeList, TMDB, IMDb, Spotify, Apple Music, etc.).
+
+Rules:
+
+1. Preserve ALL official punctuation.
+Examples:
+- Re:ZERO -Starting Life in Another World-
+- KONO SUBARASHII SEKAI NI SYUKUFUKU WO!
+- SPY×FAMILY
+- Steins;Gate
+- Fate/stay night
+- Dr. STONE
+- Oshi no Ko
+- Is It Wrong to Try to Pick Up Girls in a Dungeon?
+
+2. Correct missing punctuation.
+Example:
+ReZERO
+→ Re:ZERO
+
+3. Restore official capitalization.
+
+4. Ignore completely:
+- Resolution
+- Codec
+- Source
+- Fansub group
+- Release group
+- CRC
+- Language tags
+- Bit depth
+- File extension
+
+5. Detect:
+- Anime
+- Movies
+- TV Shows
+- OVAs
+- Specials
+- Music Videos
+- Songs
+- Albums (when applicable)
+
+6. Extract:
+- Season number if present
+- Episode number if present
+- Movie number if applicable
+
+7. Never invent a title.
+If uncertain, return the cleaned best match.
+
+8. Search your knowledge to find the official title even if the filename is incomplete or poorly formatted.
+
+Examples
+
+Input:
+ReZERO -Starting Life in Another World- Season 2 E08
+
+Output:
+{{
+  "title": "Re:ZERO -Starting Life in Another World-",
+  "season": 2,
+  "episode": 8,
+  "media_type": "anime"
+}}
+
+Input:
+SPY FAMILY S01E05
+
+Output:
+{{
+  "title": "SPY×FAMILY",
+  "season": 1,
+  "episode": 5,
+  "media_type": "anime"
+}}
+
+Input:
+Steins Gate 01
+
+Output:
+{{
+  "title": "Steins;Gate",
+  "season": null,
+  "episode": 1,
+  "media_type": "anime"
+}}
+
+Input:
+Dr Stone S03E02
+
+Output:
+{{
+  "title": "Dr. STONE",
+  "season": 3,
+  "episode": 2,
+  "media_type": "anime"
+}}
+
+Input:
+Kimi no Na wa 2016 1080p BluRay
+
+Output:
+{{
+  "title": "Your Name.",
+  "season": null,
+  "episode": null,
+  "media_type": "movie"
+}}
+
+Input:
+Shape of You.mp3
+
+Output:
+{{
+  "title": "Shape of You",
+  "season": null,
+  "episode": null,
+  "media_type": "song"
+}}
+
+Return ONLY valid JSON in this exact format:
+
+{{
+  "title": "...",
+  "season": <number or null>,
+  "episode": <number or null>,
+  "media_type": "anime|movie|tv|song|ova|special|music_video|unknown"
+}}
+
+Filename:
+{filename}
+"""
+    def _parse_response(text):
+        parsed = json.loads(text)
+        title = parsed.get("title")
+        season = parsed.get("season")
+        ep = parsed.get("episode")
+        if season and ep:
+            ep_str = f"Season {season} Episode {ep}"
+        elif ep:
+            ep_str = f"Episode {ep}"
+        else:
+            ep_str = ""
+        return title, ep_str
+
+    # No grounding tool — the model has built-in knowledge of official titles
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"response_mime_type": "application/json"},
-        "tools": [{"googleSearch": {}}]
+        "generationConfig": {"response_mime_type": "application/json"}
     }
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
-            data = r.json()
-            text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-            parsed = json.loads(text)
-            title = parsed.get("title")
-            ep = parsed.get("episode")
-            ep_str = f"Episode {ep}" if ep else ""
-            return title, ep_str
-        # Fallback: retry without grounding tool if grounding not supported
-        payload2 = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"response_mime_type": "application/json"}
-        }
-        r2 = requests.post(url, json=payload2, timeout=8)
-        if r2.status_code == 200:
-            data2 = r2.json()
-            text2 = data2.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-            parsed2 = json.loads(text2)
-            title2 = parsed2.get("title")
-            ep2 = parsed2.get("episode")
-            ep_str2 = f"Episode {ep2}" if ep2 else ""
-            return title2, ep_str2
+            text = r.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            return _parse_response(text)
     except Exception as e:
         print(f"Gemini AI Error: {e}")
     return None, None
@@ -1487,34 +1628,58 @@ class WebApi:
         return self.backend.state_data
         
     def get_stats(self):
-        history = self.backend.history
         stats = {
             "total_watch_time": 0,
             "media_types": {"anime": 0, "movie": 0, "tv_show": 0, "music": 0},
-            "recent_activity": []
+            "recent_activity": [0] * 7,
+            "history": []
         }
-        
-        for entry in history:
-            dur = entry.get("duration", 0)
-            stats["total_watch_time"] += dur
-            mtype = entry.get("media_type", "movie")
-            if mtype in stats["media_types"]:
-                stats["media_types"][mtype] += dur
-            else:
-                stats["media_types"][mtype] = dur
-                
-        # Get last 7 days of activity
-        now = time.time()
-        for i in range(7):
-            stats["recent_activity"].append(0)
-            
-        for entry in history:
-            ts = entry.get("timestamp", 0)
-            days_ago = int((now - ts) / 86400)
-            if 0 <= days_ago < 7:
-                stats["recent_activity"][6 - days_ago] += entry.get("duration", 0)
-                
+        try:
+            db_path = getattr(self.backend, 'db_path', None)
+            if not db_path or not os.path.exists(db_path):
+                return stats
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+
+            # Total watch time
+            c.execute("SELECT SUM(watch_duration) FROM history")
+            row = c.fetchone()
+            stats["total_watch_time"] = int(row[0] or 0)
+
+            # Media type breakdown using is_music flag
+            c.execute("SELECT is_music, SUM(watch_duration) FROM history GROUP BY is_music")
+            for is_music, dur in c.fetchall():
+                dur = int(dur or 0)
+                if is_music:
+                    stats["media_types"]["music"] += dur
+                else:
+                    stats["media_types"]["anime"] += dur  # default non-music to anime bucket
+
+            # 7-day activity (minutes)
+            now = datetime.datetime.now()
+            for i in range(7):
+                day = now - datetime.timedelta(days=6 - i)
+                day_str = day.strftime("%Y-%m-%d")
+                c.execute("SELECT SUM(watch_duration) FROM history WHERE timestamp LIKE ?", (day_str + "%",))
+                r = c.fetchone()
+                stats["recent_activity"][i] = round((r[0] or 0) / 60, 1)
+
+            # Recent history list (last 50 entries)
+            c.execute("SELECT title, episode_str, is_music, watch_duration, timestamp FROM history ORDER BY id DESC LIMIT 50")
+            for row in c.fetchall():
+                stats["history"].append({
+                    "title": row[0],
+                    "episode": row[1],
+                    "is_music": bool(row[2]),
+                    "duration": int(row[3]),
+                    "timestamp": row[4]
+                })
+
+            conn.close()
+        except Exception as e:
+            print(f"[get_stats] Error: {e}")
         return stats
+
         
     def save_config(self, new_config):
         try:
