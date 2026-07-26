@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.3.2"
+CURRENT_VERSION = "4.3.3"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1145,8 +1145,36 @@ class RPCBackend:
                     self.state_data["title"] = raw_title.strip()
                     self.state_data["artist"] = meta.get("artist", "")
                     self.state_data["album"] = meta.get("album", "")
-                    self.state_data["local_arturl"] = meta.get("artwork_url", "")
-                    
+
+                    # --- Offline cover: read VLC's embedded artwork as base64 ---
+                    art_data_uri = ""
+                    vlc_art_url = meta.get("artwork_url", "")
+                    try:
+                        # VLC provides a local file:// path to extracted/cached cover art
+                        if vlc_art_url and vlc_art_url.startswith("file:///"):
+                            import base64, mimetypes
+                            art_path = urllib.parse.unquote(vlc_art_url[8:]).replace("/", os.sep)
+                            if os.path.isfile(art_path):
+                                mime = mimetypes.guess_type(art_path)[0] or "image/jpeg"
+                                with open(art_path, "rb") as af:
+                                    art_data_uri = f"data:{mime};base64," + base64.b64encode(af.read()).decode()
+                        # Fallback: pull cover from VLC's HTTP /art endpoint
+                        if not art_data_uri:
+                            import base64
+                            vlc_host = self.config.get("vlc_host", "localhost")
+                            vlc_port = self.config.get("vlc_port", 8080)
+                            vlc_pw = self.config.get("vlc_password", "")
+                            ar = requests.get(
+                                f"http://{vlc_host}:{vlc_port}/art",
+                                auth=HTTPBasicAuth("", vlc_pw), timeout=2
+                            )
+                            if ar.status_code == 200 and ar.headers.get("Content-Type", "").startswith("image"):
+                                mime = ar.headers["Content-Type"].split(";")[0]
+                                art_data_uri = f"data:{mime};base64," + base64.b64encode(ar.content).decode()
+                    except Exception:
+                        pass
+                    self.state_data["local_arturl"] = art_data_uri
+
                     # Codec Parsing & Quality Tags
                     quality = ""
                     audio_tracks = 0
