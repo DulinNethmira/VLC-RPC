@@ -35,9 +35,9 @@ window.updateState = function(state) {
         idleState.style.display = 'none';
         activeState.style.display = 'flex';
 
-        // Cover image
+        // Cover image — prefer offline VLC art, fall back to internet metadata
         const coverEl = document.getElementById('hero-cover');
-        const imgUrl = (state.metadata && state.metadata.image_url) ? state.metadata.image_url : (state.local_arturl ? state.local_arturl : '');
+        const imgUrl = state.local_arturl || (state.metadata && state.metadata.image_url) || '';
         
         if (!imgUrl) {
             coverEl.style.opacity = '0.3';
