@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.4.1"
+CURRENT_VERSION = "4.4.2"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -391,6 +391,7 @@ class RPCBackend:
         self.config.update(load_config())
         self.metadata_cache = {}
         self.gemini_cache = {}
+        self.gemini_fail_times = {}  # tracks last failure time per filename for retry logic
         self.state_data = {
             "current_version": CURRENT_VERSION,
             "vlc_connected": False,
@@ -1057,17 +1058,28 @@ class RPCBackend:
                 metadata = self.fetch_itunes_metadata(search_title, artist)
             elif media_type == "movie":
                 metadata = self.fetch_omdb_metadata(search_title, year)
-                # Fallback: could be an anime OVA/movie (e.g. Re:ZERO Memory Snow)
                 if not metadata or not metadata.get("image_url"):
                     metadata = self.fetch_jikan_metadata(search_title)
             elif media_type == "anime":
-                metadata = self.fetch_jikan_metadata(search_title)
+                # For Season 2+, search with ordinal suffix to get the right season entry
+                # (Jikan has separate entries: "Re:ZERO 2nd Season", "Re:ZERO 3rd Season", etc.)
+                if season_num and season_num > 1:
+                    ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
+                    suffix = ordinals.get(season_num, f"{season_num}th")
+                    season_search = f"{search_title} {suffix} Season"
+                    metadata = self.fetch_jikan_metadata(season_search)
+                if not metadata or not metadata.get("image_url"):
+                    metadata = self.fetch_jikan_metadata(search_title)
+                # Supplement with OMDb for rating if Jikan has none
+                if metadata and not metadata.get("rating"):
+                    omdb = self.fetch_omdb_metadata(search_title, year)
+                    if omdb and omdb.get("rating"):
+                        metadata["rating"] = omdb["rating"]
             elif media_type == "tv_show":
                 metadata = self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num)
                 if not metadata or not metadata.get("image_url"):
                     metadata = self.fetch_omdb_metadata(search_title, year)
                 if not metadata or not metadata.get("image_url"):
-                    # Many anime are classified as tv_show — try Jikan as final fallback
                     metadata = self.fetch_jikan_metadata(search_title)
 
             if not metadata or not metadata.get("image_url"):
@@ -1222,8 +1234,14 @@ class RPCBackend:
                     cleaned_title, episode_str = None, None
 
                     if gemini_key:
-                        if raw_name not in self.gemini_cache:
-                            # Mark as pending so we don't spawn multiple threads for same file
+                        cached = self.gemini_cache.get(raw_name)
+                        last_fail = self.gemini_fail_times.get(raw_name, 0)
+                        # Spawn a new thread if: never tried, OR last failure was >60s ago
+                        should_try = (
+                            raw_name not in self.gemini_cache
+                            or (cached is None and time.time() - last_fail > 60)
+                        )
+                        if should_try:
                             self.gemini_cache[raw_name] = "pending"
                             def _run_gemini(name, key):
                                 t, e, mt = query_gemini_title(name, key)
@@ -1231,7 +1249,9 @@ class RPCBackend:
                                     self.gemini_cache[name] = (t, e, mt or "")
                                     self.anilist_log(f"[Gemini AI] Match: {t} {e}")
                                 else:
+                                    # Don't permanently block — allow retry after 60s
                                     self.gemini_cache[name] = None
+                                    self.gemini_fail_times[name] = time.time()
                             threading.Thread(target=_run_gemini, args=(raw_name, gemini_key), daemon=True).start()
 
                         cached = self.gemini_cache.get(raw_name)
