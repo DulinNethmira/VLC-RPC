@@ -8,6 +8,8 @@ function formatTime(seconds) {
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+const COVER_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180"%3E%3Crect fill="%2322222a" width="180" height="180"/%3E%3Cpath d="M50 56h80v68H50z" fill="%2330303a"/%3E%3Cpath d="M58 70h64M58 86h64M58 102h42" stroke="%235b6070" stroke-width="8" stroke-linecap="round"/%3E%3C/svg%3E';
+
 // ===== State Update from Backend =====
 window.updateState = function(state) {
     // Hide loader on first update
@@ -37,7 +39,23 @@ window.updateState = function(state) {
 
         // Cover image — episode-specific online cover first, fallback to VLC embedded art
         const coverEl = document.getElementById('hero-cover');
-        const imgUrl = (state.metadata && state.metadata.image_url) || state.local_arturl || '';
+        const onlineImgUrl = (state.metadata && state.metadata.image_url) || '';
+        const localImgUrl = state.local_arturl || '';
+        const imgUrl = onlineImgUrl || localImgUrl || '';
+
+        coverEl.onerror = () => {
+            if (localImgUrl && coverEl.dataset.fallbackTried !== 'local') {
+                coverEl.dataset.fallbackTried = 'local';
+                coverEl.src = localImgUrl;
+                heroBgBlur.style.backgroundImage = `url(${localImgUrl})`;
+                heroBgBlur.style.opacity = '1';
+                return;
+            }
+            coverEl.dataset.fallbackTried = 'placeholder';
+            coverEl.src = COVER_PLACEHOLDER;
+            coverEl.style.opacity = '0.3';
+            heroBgBlur.style.opacity = '0';
+        };
         
         if (!imgUrl) {
             coverEl.style.opacity = '0.3';
@@ -51,12 +69,16 @@ window.updateState = function(state) {
             document.documentElement.style.setProperty('--glow-color', 'rgba(67, 56, 202, 0.4)');
         }
 
-        if (imgUrl && coverEl.src !== imgUrl) {
+        if (imgUrl && coverEl.dataset.requestedSrc !== imgUrl) {
+            coverEl.dataset.requestedSrc = imgUrl;
+            coverEl.dataset.fallbackTried = '';
             coverEl.src = imgUrl;
             heroBgBlur.style.backgroundImage = `url(${imgUrl})`;
             heroBgBlur.style.opacity = '1';
         } else if (!imgUrl) {
-            coverEl.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><rect fill="%23222" width="180" height="180"/><text x="90" y="95" text-anchor="middle" fill="%23555" font-size="48">🎬</text></svg>';
+            coverEl.dataset.requestedSrc = '';
+            coverEl.dataset.fallbackTried = 'placeholder';
+            coverEl.src = COVER_PLACEHOLDER;
             heroBgBlur.style.opacity = '0';
         }
 
@@ -106,7 +128,9 @@ window.updateState = function(state) {
         document.getElementById('progress-fill').style.width = pct + '%';
 
         // Update Discord Preview
-        document.getElementById('dc-large-img').src = imgUrl || 'icon.png';
+        const dcLargeImg = document.getElementById('dc-large-img');
+        dcLargeImg.onerror = () => { dcLargeImg.src = 'icon.png'; };
+        dcLargeImg.src = imgUrl || 'icon.png';
         if (imgUrl) {
             document.getElementById('dc-small-img-container').style.display = 'flex';
             document.getElementById('dc-small-img').src = 'icon.png';

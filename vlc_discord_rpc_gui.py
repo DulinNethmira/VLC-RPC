@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.5.1"
+CURRENT_VERSION = "4.5.2"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -407,6 +407,9 @@ class RPCBackend:
             "metadata": None,
             "episode_str": "",
             "local_image_path": None,
+            "local_arturl": "",
+            "_last_art_key": "",
+            "_last_art_uri": "",
             "exit_flag": False,
             "update_available": False,
             "update_version": "",
@@ -997,6 +1000,53 @@ class RPCBackend:
         except Exception:
             return None
 
+    def normalize_cover_url(self, url):
+        """Return a Discord/UI-safe image URL, or None if it is not usable."""
+        if not url or not isinstance(url, str):
+            return None
+
+        url = url.strip()
+        if url.startswith("data:image/"):
+            return url
+
+        url = ensure_https(url)
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return None
+
+        headers = {
+            "User-Agent": f"VLC-RPC/{CURRENT_VERSION}",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        }
+        try:
+            r = requests.get(url, headers=headers, stream=True, timeout=5, allow_redirects=True)
+            content_type = (r.headers.get("Content-Type") or "").split(";")[0].lower()
+            final_url = ensure_https(r.url)
+            status_ok = 200 <= r.status_code < 300
+            r.close()
+            if status_ok and content_type.startswith("image/"):
+                return final_url
+            if status_ok and re.search(r'\.(jpg|jpeg|png|webp|gif)(?:$|\?)', urllib.parse.urlparse(final_url).path, re.I):
+                return final_url
+            self.log(f"[Metadata] Rejected non-image cover URL: {url}")
+            return None
+        except Exception:
+            # Some CDNs block validation requests but still render fine in Discord/WebView.
+            # Keep plausible direct image URLs instead of deleting otherwise good covers.
+            if parsed.scheme == "https" and re.search(r'\.(jpg|jpeg|png|webp|gif)(?:$|\?)', parsed.path, re.I):
+                return url
+            return None
+
+    def prepare_metadata_cover(self, metadata):
+        if not metadata:
+            return None
+        if not isinstance(metadata, dict):
+            return None
+        metadata = dict(metadata)
+        image_url = self.normalize_cover_url(metadata.get("image_url"))
+        metadata["image_url"] = image_url
+        return metadata
+
     def set_window(self, window):
         self.window = window
 
@@ -1055,35 +1105,38 @@ class RPCBackend:
 
             self.log(f"[Metadata] Fetching '{search_title}' type={media_type} S{season_num}E{episode_num}")
 
+            def prepared(candidate):
+                return self.prepare_metadata_cover(candidate)
+
             metadata = None
             # Try ALL sources in priority order. AniList is now universal fallback
             # because many anime are misclassified as tv_show/movie.
             if media_type == "music":
-                metadata = self.fetch_itunes_metadata(search_title, artist)
+                metadata = prepared(self.fetch_itunes_metadata(search_title, artist))
 
             elif media_type == "movie":
-                metadata = self.fetch_omdb_metadata(search_title, year)
+                metadata = prepared(self.fetch_omdb_metadata(search_title, year))
                 if not metadata or not metadata.get("image_url"):
-                    metadata = self.fetch_anilist_metadata(search_title)
+                    metadata = prepared(self.fetch_anilist_metadata(search_title))
                 if not metadata or not metadata.get("image_url"):
-                    metadata = self.fetch_jikan_metadata(search_title)
+                    metadata = prepared(self.fetch_jikan_metadata(search_title))
 
             elif media_type == "anime":
                 # AniList: best English title matching + season-aware
                 if season_num and season_num > 1:
                     ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
                     suffix = ordinals.get(season_num, f"{season_num}th")
-                    metadata = self.fetch_anilist_metadata(f"{search_title} {suffix} Season")
+                    metadata = prepared(self.fetch_anilist_metadata(f"{search_title} {suffix} Season"))
                 if not metadata or not metadata.get("image_url"):
-                    metadata = self.fetch_anilist_metadata(search_title)
+                    metadata = prepared(self.fetch_anilist_metadata(search_title))
                 # Jikan fallback
                 if not metadata or not metadata.get("image_url"):
                     if season_num and season_num > 1:
                         ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
                         suffix = ordinals.get(season_num, f"{season_num}th")
-                        metadata = self.fetch_jikan_metadata(f"{search_title} {suffix} Season")
+                        metadata = prepared(self.fetch_jikan_metadata(f"{search_title} {suffix} Season"))
                 if not metadata or not metadata.get("image_url"):
-                    metadata = self.fetch_jikan_metadata(search_title)
+                    metadata = prepared(self.fetch_jikan_metadata(search_title))
                 # Supplement rating from OMDb if missing
                 if metadata and not metadata.get("rating"):
                     omdb = self.fetch_omdb_metadata(search_title, year)
@@ -1091,16 +1144,16 @@ class RPCBackend:
                         metadata["rating"] = omdb["rating"]
 
             elif media_type == "tv_show":
-                metadata = self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num)
+                metadata = prepared(self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num))
                 if not metadata or not metadata.get("image_url"):
-                    metadata = self.fetch_omdb_metadata(search_title, year)
+                    metadata = prepared(self.fetch_omdb_metadata(search_title, year))
                 if not metadata or not metadata.get("image_url"):
-                    metadata = self.fetch_anilist_metadata(search_title)
+                    metadata = prepared(self.fetch_anilist_metadata(search_title))
                 if not metadata or not metadata.get("image_url"):
-                    metadata = self.fetch_jikan_metadata(search_title)
+                    metadata = prepared(self.fetch_jikan_metadata(search_title))
 
             if not metadata or not metadata.get("image_url"):
-                metadata = self.fetch_wikipedia_metadata(search_title)
+                metadata = prepared(self.fetch_wikipedia_metadata(search_title))
 
             if metadata and metadata.get("image_url"):
                 self.log(f"[Metadata] ✓ Cover found for '{search_title}'")
@@ -1124,6 +1177,7 @@ class RPCBackend:
             # but input_uri hasn't changed (same file, title just got resolved by Gemini).
             still_same_file = (
                 not input_uri  # backwards compat: old calls without input_uri always apply
+                or self.state_data.get("_last_art_key", "") == input_uri
                 or self.state_data.get("_last_art_uri", "") == input_uri
             )
             if still_same_file:
@@ -1187,12 +1241,18 @@ class RPCBackend:
                     self.state_data["album"] = meta.get("album", "")
 
                     # --- Offline cover: read VLC's embedded artwork as base64 ---
-                    # Only re-read when the file changes. This prevents cover flicker
-                    # when Gemini resolves the title and track_key changes on the same file.
-                    _last_art_uri = self.state_data.get("_last_art_uri", "")
-                    if input_uri != _last_art_uri:
-                        # New file — clear old art and re-read
+                    # Track artwork by the strongest available media identity. VLC can
+                    # leave meta.url empty/stale, so filename and playlist id are used
+                    # as fallbacks to prevent previous-episode cover bleed.
+                    art_identity = input_uri or file_name or current_plid
+                    _last_art_key = self.state_data.get("_last_art_key", "")
+                    if art_identity != _last_art_key:
+                        # New file - clear old online/offline art immediately while new
+                        # metadata is resolving, so the UI never shows the previous item.
+                        self.state_data["_last_art_key"] = art_identity
                         self.state_data["_last_art_uri"] = input_uri
+                        self.state_data["metadata"] = None
+                        self.state_data["local_image_path"] = None
                         art_data_uri = ""
                         vlc_art_url = meta.get("artwork_url", "")
                         try:
@@ -1348,36 +1408,58 @@ class RPCBackend:
                             cache_key = f"{media_type}:{cleaned_title}:{self.state_data['artist']}" if is_music else f"{media_type}:{cleaned_title}:{episode_str}"
 
                             if cache_key in self.metadata_cache:
-                                self.state_data["metadata"] = self.metadata_cache[cache_key]
-                                self.state_data["local_image_path"] = self.state_data["metadata"].get("image_url")
-                                self.state_data["status_message"] = "Metadata loaded from cache."
-                                self.log(f"Playing '{cleaned_title}' (Metadata from cache)")
+                                cached_metadata = self.prepare_metadata_cover(self.metadata_cache.get(cache_key))
+                                if cached_metadata and cached_metadata.get("image_url"):
+                                    self.metadata_cache[cache_key] = cached_metadata
+                                    self.state_data["metadata"] = cached_metadata
+                                    self.state_data["local_image_path"] = cached_metadata.get("image_url")
+                                    self.state_data["status_message"] = "Metadata loaded from cache."
+                                    self.log(f"Playing '{cleaned_title}' (Metadata from cache)")
+                                else:
+                                    self.metadata_cache.pop(cache_key, None)
+                                    self.save_metadata_cache()
+                                    self.state_data["metadata"] = None
+                                    self.state_data["local_image_path"] = None
+                                    self.state_data["status_message"] = "Refreshing bad metadata cache..."
+                                    self.log(f"Playing '{cleaned_title}' (Refreshing bad metadata cache...)")
+                                    fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], art_identity, media_type)
+                                    threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
                             else:
                                 self.state_data["metadata"] = None
                                 self.state_data["local_image_path"] = None
                                 self.state_data["status_message"] = "Fetching metadata..."
                                 self.log(f"Playing '{cleaned_title}' (Fetching metadata...)")
-                                fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], input_uri, media_type)
+                                fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], art_identity, media_type)
                                 threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
                         else:
                             self.state_data["metadata"] = None
                             self.state_data["episode_str"] = ""
                             self.state_data["local_image_path"] = None
+                            self.state_data["local_arturl"] = ""
                             self.log("VLC stopped playback.")
                 else:
                     self.state_data["vlc_connected"] = False
+                    self.state_data["metadata"] = None
+                    self.state_data["local_image_path"] = None
+                    self.state_data["local_arturl"] = ""
 
             except requests.exceptions.RequestException:
                 if self.state_data.get("vlc_connected"):
                     self.log("VLC connection lost.")
                 # VLC is unreachable — mark disconnected and hibernate briefly
                 self.state_data["vlc_connected"] = False
+                self.state_data["metadata"] = None
+                self.state_data["local_image_path"] = None
+                self.state_data["local_arturl"] = ""
                 time.sleep(5)
                 # Fall through to Discord reconnect logic below
             except Exception as e:
                 if self.state_data.get("vlc_connected"):
                     self.log(f"VLC error: {e}")
                 self.state_data["vlc_connected"] = False
+                self.state_data["metadata"] = None
+                self.state_data["local_image_path"] = None
+                self.state_data["local_arturl"] = ""
 
             desired_client_id = self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID
 
@@ -1839,6 +1921,9 @@ class WebApi:
         # 1. Clear current metadata so the cover re-fetches
         b.state_data["metadata"] = None
         b.state_data["local_image_path"] = None
+        b.state_data["local_arturl"] = ""
+        b.state_data["_last_art_key"] = ""
+        b.state_data["_last_art_uri"] = ""
         # 2. Clear the metadata cache entry for this track so it re-fetches fresh
         title = b.state_data.get("cleaned_title", "")
         ep_str = b.state_data.get("episode_str", "")
@@ -1847,6 +1932,7 @@ class WebApi:
         cache_key = f"{media_type}:{title}:{artist}" if media_type == "music" else f"{media_type}:{title}:{ep_str}"
         if cache_key in b.metadata_cache:
             del b.metadata_cache[cache_key]
+            b.save_metadata_cache()
         # 3. Clear the scrobbled memory so AniList re-checks this episode
         episode_key = f"{title}:E"
         b.scrobbled_episodes = {k for k in b.scrobbled_episodes if not k.startswith(episode_key)}
