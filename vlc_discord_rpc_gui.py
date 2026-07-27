@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.5.0"
+CURRENT_VERSION = "4.5.1"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1053,9 +1053,11 @@ class RPCBackend:
             search_title = re.sub(r'\bSeason\s+\d+\b', '', search_title, flags=re.IGNORECASE).strip()
             search_title = re.sub(r'\s{2,}', ' ', search_title).strip()
 
-            self.log(f"[Metadata] Fetching '{search_title}' ({media_type}) S{season_num}E{episode_num}")
+            self.log(f"[Metadata] Fetching '{search_title}' type={media_type} S{season_num}E{episode_num}")
 
             metadata = None
+            # Try ALL sources in priority order. AniList is now universal fallback
+            # because many anime are misclassified as tv_show/movie.
             if media_type == "music":
                 metadata = self.fetch_itunes_metadata(search_title, artist)
 
@@ -1128,7 +1130,11 @@ class RPCBackend:
                 self.state_data["metadata"] = metadata
                 self.state_data["local_image_path"] = metadata.get("image_url") if metadata else None
                 self.state_data["status_message"] = "Metadata loaded successfully."
+                self.log(f"[Metadata] Applied metadata for '{cleaned_title}'")
+            else:
+                self.log(f"[Metadata] Discarded stale metadata (file changed)")
         except Exception as e:
+            self.log(f"[Metadata] FETCH FAILED: {e}")
             self.state_data["status_message"] = f"Metadata fetch failed: {e}"
 
 
@@ -1272,6 +1278,7 @@ class RPCBackend:
                                     # Don't permanently block — allow retry after 60s
                                     self.gemini_cache[name] = None
                                     self.gemini_fail_times[name] = time.time()
+                                    self.anilist_log(f"[Gemini AI] Failed to resolve title. Retrying in 60s.")
                             threading.Thread(target=_run_gemini, args=(raw_name, gemini_key), daemon=True).start()
 
                         cached = self.gemini_cache.get(raw_name)
@@ -1315,13 +1322,17 @@ class RPCBackend:
                     # endless spurious metadata re-fetches for the same file.
                     track_key = f"{current_plid}:{input_uri}:{file_name}:{cleaned_title}:{episode_str}"
 
+                    # Don't trigger metadata fetch if Gemini is still pending —
+                    # wait for it to resolve so we get the correct title and type.
+                    gemini_pending = (gemini_key and self.gemini_cache.get(raw_name) == "pending")
+
                     if self.force_update_flag:
                         last_track_key = None
                         self.force_update_flag = False
 
                     self.check_auto_sync()
 
-                    if track_key != last_track_key:
+                    if track_key != last_track_key and not gemini_pending:
                         if hasattr(self, 'last_watched_title_raw') and self.last_watched_title_raw != self.state_data['title']:
                             self.add_to_history(self.last_watched_title, self.last_watched_ep, self.last_watched_music, self.current_watch_duration)
                             self.current_watch_duration = 0
