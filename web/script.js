@@ -35,9 +35,9 @@ window.updateState = function(state) {
         idleState.style.display = 'none';
         activeState.style.display = 'flex';
 
-        // Cover image — prefer offline VLC art, fall back to internet metadata
+        // Cover image — episode-specific online cover first, fallback to VLC embedded art
         const coverEl = document.getElementById('hero-cover');
-        const imgUrl = state.local_arturl || (state.metadata && state.metadata.image_url) || '';
+        const imgUrl = (state.metadata && state.metadata.image_url) || state.local_arturl || '';
         
         if (!imgUrl) {
             coverEl.style.opacity = '0.3';
