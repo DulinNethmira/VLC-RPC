@@ -10,6 +10,15 @@ function formatTime(seconds) {
 
 const COVER_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180"%3E%3Crect fill="%2322222a" width="180" height="180"/%3E%3Cpath d="M50 56h80v68H50z" fill="%2330303a"/%3E%3Cpath d="M58 70h64M58 86h64M58 102h42" stroke="%235b6070" stroke-width="8" stroke-linecap="round"/%3E%3C/svg%3E';
 
+function getRatingText(metadata) {
+    if (!metadata) return '';
+    const rating = metadata.episode_rating || metadata.rating || metadata.imdb_rating || '';
+    if (rating === null || rating === undefined || rating === '') return '';
+    const numeric = Number(rating);
+    const cleanRating = Number.isFinite(numeric) ? numeric.toFixed(1).replace(/\.0$/, '') : String(rating);
+    return `★ ${cleanRating}`;
+}
+
 // ===== State Update from Backend =====
 window.updateState = function(state) {
     // Hide loader on first update
@@ -115,8 +124,13 @@ window.updateState = function(state) {
 
         // Title & Subtitle — prefer cleaned_title ("One Piece") over raw title ("One Piece 1168.mp4")
         const displayTitle = state.cleaned_title || state.title || 'Unknown';
+        const ratingText = getRatingText(state.metadata);
+        const subtitleParts = [];
+        if (state.episode_str) subtitleParts.push(state.episode_str);
+        else if (isMusic && state.artist) subtitleParts.push(state.artist);
+        if (ratingText) subtitleParts.push(ratingText);
         document.getElementById('hero-title').textContent = displayTitle;
-        document.getElementById('hero-subtitle').textContent = state.episode_str || (isMusic ? state.artist : '');
+        document.getElementById('hero-subtitle').textContent = subtitleParts.join(' • ');
 
         // Progress
         const currentSecs = state.time || 0;
@@ -140,7 +154,11 @@ window.updateState = function(state) {
         
         document.getElementById('dc-activity-type').textContent = isMusic ? 'Listening to' : 'Watching';
         document.getElementById('dc-details').textContent = displayTitle;
-        document.getElementById('dc-state').textContent = state.episode_str || (isMusic ? 'by ' + state.artist : '');
+        const dcStateParts = [];
+        if (state.episode_str) dcStateParts.push(state.episode_str);
+        else if (isMusic && state.artist) dcStateParts.push('by ' + state.artist);
+        if (ratingText) dcStateParts.push(ratingText);
+        document.getElementById('dc-state').textContent = dcStateParts.join(' • ');
         
         if (state.playback_state === 'playing' && totalSecs > 0) {
             const remaining = totalSecs - currentSecs;
