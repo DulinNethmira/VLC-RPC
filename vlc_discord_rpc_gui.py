@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.5.2"
+CURRENT_VERSION = "4.5.3"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -432,11 +432,14 @@ class RPCBackend:
     def log(self, msg):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         formatted = f"[{timestamp}] {msg}"
-        print(formatted)
+        try:
+            print(formatted)
+        except UnicodeEncodeError:
+            encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+            print(formatted.encode(encoding, errors='replace').decode(encoding, errors='replace'))
         if self.window:
             try:
-                safe_msg = formatted.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'")
-                self.window.evaluate_js(f"if(window.addLog) window.addLog('{safe_msg}');")
+                self.window.evaluate_js(f"if(window.addLog) window.addLog({json.dumps(formatted)});")
             except Exception:
                 pass
 
@@ -1156,9 +1159,9 @@ class RPCBackend:
                 metadata = prepared(self.fetch_wikipedia_metadata(search_title))
 
             if metadata and metadata.get("image_url"):
-                self.log(f"[Metadata] ✓ Cover found for '{search_title}'")
+                self.log(f"[Metadata] OK Cover found for '{search_title}'")
             else:
-                self.log(f"[Metadata] ✗ No cover found for '{search_title}'")
+                self.log(f"[Metadata] NO Cover found for '{search_title}'")
 
             if metadata:
                 try:
@@ -1517,11 +1520,11 @@ class RPCBackend:
                             genre_str = ", ".join(genres[:2]) if isinstance(genres, list) else str(genres)
                             rating = _meta.get("rating") or _meta.get("imdb_rating") or ""
                             if rating and genre_str:
-                                kwargs["state"] = f"{genre_str} | ⭐ {rating}"
+                                kwargs["state"] = f"{genre_str} | Rating {rating}"
                             elif genre_str:
                                 kwargs["state"] = f"Genres: {genre_str}"
                             elif rating:
-                                kwargs["state"] = f"⭐ {rating}"
+                                kwargs["state"] = f"Rating {rating}"
 
                             desc = self.state_data.get("metadata", {}).get("description", "") if self.state_data.get("metadata") else ""
                             kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + (f" • {desc}" if desc else "")
@@ -1539,10 +1542,10 @@ class RPCBackend:
                                     rating = str(round(float(rating), 1))
                                 except (ValueError, TypeError):
                                     rating = str(rating)
-                            rating_str = f" | ⭐ {rating}" if rating else ""
+                            rating_str = f" | Rating {rating}" if rating else ""
                             state_str = f"{ep_str}{rating_str}"
                             if self.state_data["playback_state"] == "paused":
-                                kwargs["state"] = f"⏸ Paused | {state_str}" if state_str else "⏸ Paused"
+                                kwargs["state"] = f"Paused | {state_str}" if state_str else "Paused"
                             else:
                                 kwargs["state"] = state_str
 
@@ -1648,17 +1651,22 @@ class RPCBackend:
                 rating = None
                 if data.get("rating"):
                     rating = data["rating"].get("average")
+                episode_rating = None
+                matched_ep = None
                 
                 if embed and data.get("_embedded", {}).get("episodes"):
                     episodes = data["_embedded"]["episodes"]
-                    matched_ep = None
                     if season_num is not None and episode_num is not None:
                         matched_ep = next((ep for ep in episodes if ep.get("season") == season_num and ep.get("number") == episode_num), None)
                         if not matched_ep and episode_num <= len(episodes):
                             matched_ep = episodes[episode_num - 1]
-                    elif episode_num is not None and episode_num <= len(episodes):
-                        matched_ep = episodes[episode_num - 1]
+                    elif episode_num is not None:
+                        matched_ep = next((ep for ep in episodes if ep.get("number") == episode_num), None)
+                        if not matched_ep and episode_num <= len(episodes):
+                            matched_ep = episodes[episode_num - 1]
                     
+                    if matched_ep and matched_ep.get("rating"):
+                        episode_rating = matched_ep["rating"].get("average")
                     if matched_ep and matched_ep.get("image"):
                         ep_img = matched_ep["image"].get("original") or matched_ep["image"].get("medium")
                         if ep_img:
@@ -1666,7 +1674,10 @@ class RPCBackend:
                 
                 return {
                     "image_url": img_url,
-                    "rating": rating,
+                    "rating": episode_rating or rating,
+                    "episode_rating": episode_rating,
+                    "show_rating": rating,
+                    "rating_scope": "episode" if episode_rating else "show",
                     "genres": data.get("genres", []),
                     "description": f"TV Show | {data.get('type', '')}",
                     "page_url": data.get("url"),
