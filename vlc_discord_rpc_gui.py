@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.4.2"
+CURRENT_VERSION = "4.5.0"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1028,12 +1028,13 @@ class RPCBackend:
             pass
 
 
-    def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist, input_uri=""):
+    def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist, input_uri="", media_type_hint=""):
         """Fetch metadata in a background thread so the main loop stays fast."""
         try:
             season_num = None
             episode_num = None
-            media_type = self.state_data.get("media_type", "movie")
+            # Use passed media_type to avoid race with state_data being updated for a new file
+            media_type = media_type_hint or self.state_data.get("media_type", "movie")
 
             se_parsed = re.search(r'Season\s+(\d+)\s+Episode\s+(\d+)', episode_str)
             if se_parsed:
@@ -1046,44 +1047,63 @@ class RPCBackend:
 
             year_match = re.search(r'\((\d{4})\)', episode_str)
             year = year_match.group(1) if year_match else None
-            
+
             search_title = re.sub(r'\b(19|20)\d{2}\b', '', cleaned_title)
             search_title = re.sub(r'[\(\)]', '', search_title).strip()
-            # CRITICAL: strip 'Season N' that guessit sometimes bakes into the title
             search_title = re.sub(r'\bSeason\s+\d+\b', '', search_title, flags=re.IGNORECASE).strip()
             search_title = re.sub(r'\s{2,}', ' ', search_title).strip()
+
+            self.log(f"[Metadata] Fetching '{search_title}' ({media_type}) S{season_num}E{episode_num}")
 
             metadata = None
             if media_type == "music":
                 metadata = self.fetch_itunes_metadata(search_title, artist)
+
             elif media_type == "movie":
                 metadata = self.fetch_omdb_metadata(search_title, year)
                 if not metadata or not metadata.get("image_url"):
+                    metadata = self.fetch_anilist_metadata(search_title)
+                if not metadata or not metadata.get("image_url"):
                     metadata = self.fetch_jikan_metadata(search_title)
+
             elif media_type == "anime":
-                # For Season 2+, search with ordinal suffix to get the right season entry
-                # (Jikan has separate entries: "Re:ZERO 2nd Season", "Re:ZERO 3rd Season", etc.)
+                # AniList: best English title matching + season-aware
                 if season_num and season_num > 1:
                     ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
                     suffix = ordinals.get(season_num, f"{season_num}th")
-                    season_search = f"{search_title} {suffix} Season"
-                    metadata = self.fetch_jikan_metadata(season_search)
+                    metadata = self.fetch_anilist_metadata(f"{search_title} {suffix} Season")
+                if not metadata or not metadata.get("image_url"):
+                    metadata = self.fetch_anilist_metadata(search_title)
+                # Jikan fallback
+                if not metadata or not metadata.get("image_url"):
+                    if season_num and season_num > 1:
+                        ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
+                        suffix = ordinals.get(season_num, f"{season_num}th")
+                        metadata = self.fetch_jikan_metadata(f"{search_title} {suffix} Season")
                 if not metadata or not metadata.get("image_url"):
                     metadata = self.fetch_jikan_metadata(search_title)
-                # Supplement with OMDb for rating if Jikan has none
+                # Supplement rating from OMDb if missing
                 if metadata and not metadata.get("rating"):
                     omdb = self.fetch_omdb_metadata(search_title, year)
                     if omdb and omdb.get("rating"):
                         metadata["rating"] = omdb["rating"]
+
             elif media_type == "tv_show":
                 metadata = self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num)
                 if not metadata or not metadata.get("image_url"):
                     metadata = self.fetch_omdb_metadata(search_title, year)
                 if not metadata or not metadata.get("image_url"):
+                    metadata = self.fetch_anilist_metadata(search_title)
+                if not metadata or not metadata.get("image_url"):
                     metadata = self.fetch_jikan_metadata(search_title)
 
             if not metadata or not metadata.get("image_url"):
                 metadata = self.fetch_wikipedia_metadata(search_title)
+
+            if metadata and metadata.get("image_url"):
+                self.log(f"[Metadata] ✓ Cover found for '{search_title}'")
+            else:
+                self.log(f"[Metadata] ✗ No cover found for '{search_title}'")
 
             if metadata:
                 try:
@@ -1326,7 +1346,7 @@ class RPCBackend:
                                 self.state_data["local_image_path"] = None
                                 self.state_data["status_message"] = "Fetching metadata..."
                                 self.log(f"Playing '{cleaned_title}' (Fetching metadata...)")
-                                fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], input_uri)
+                                fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], input_uri, media_type)
                                 threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
                         else:
                             self.state_data["metadata"] = None
@@ -1605,6 +1625,43 @@ class RPCBackend:
                                 "page_url": anime.get("url"),
                                 "total_episodes": anime.get("episodes", 0)
                             }
+        except Exception:
+            pass
+        return None
+
+    def fetch_anilist_metadata(self, title):
+        """Fetch anime metadata from AniList (free GraphQL API, no auth, best English title matching)."""
+        try:
+            query = """
+            query ($search: String) {
+              Media(search: $search, type: ANIME) {
+                id title { romaji english }
+                coverImage { extraLarge large }
+                averageScore genres siteUrl episodes
+              }
+            }
+            """
+            r = requests.post(
+                "https://graphql.anilist.co",
+                json={"query": query, "variables": {"search": title}},
+                headers={"Content-Type": "application/json"},
+                timeout=8
+            )
+            if r.status_code == 200:
+                media = r.json().get("data", {}).get("Media")
+                if media:
+                    img = media.get("coverImage", {})
+                    img_url = img.get("extraLarge") or img.get("large")
+                    score = media.get("averageScore")
+                    return {
+                        "image_url": img_url,
+                        "rating": round(score / 10, 1) if score else None,
+                        "genres": media.get("genres", []),
+                        "description": f"Anime | {', '.join(media.get('genres', [])[:2])}",
+                        "page_url": media.get("siteUrl"),
+                        "anilistId": media.get("id"),
+                        "total_episodes": media.get("episodes", 0)
+                    }
         except Exception:
             pass
         return None
