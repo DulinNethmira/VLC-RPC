@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.3.3"
+CURRENT_VERSION = "4.4.0"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1147,33 +1147,38 @@ class RPCBackend:
                     self.state_data["album"] = meta.get("album", "")
 
                     # --- Offline cover: read VLC's embedded artwork as base64 ---
-                    art_data_uri = ""
-                    vlc_art_url = meta.get("artwork_url", "")
-                    try:
-                        # VLC provides a local file:// path to extracted/cached cover art
-                        if vlc_art_url and vlc_art_url.startswith("file:///"):
-                            import base64, mimetypes
-                            art_path = urllib.parse.unquote(vlc_art_url[8:]).replace("/", os.sep)
-                            if os.path.isfile(art_path):
-                                mime = mimetypes.guess_type(art_path)[0] or "image/jpeg"
-                                with open(art_path, "rb") as af:
-                                    art_data_uri = f"data:{mime};base64," + base64.b64encode(af.read()).decode()
-                        # Fallback: pull cover from VLC's HTTP /art endpoint
-                        if not art_data_uri:
-                            import base64
-                            vlc_host = self.config.get("vlc_host", "localhost")
-                            vlc_port = self.config.get("vlc_port", 8080)
-                            vlc_pw = self.config.get("vlc_password", "")
-                            ar = requests.get(
-                                f"http://{vlc_host}:{vlc_port}/art",
-                                auth=HTTPBasicAuth("", vlc_pw), timeout=2
-                            )
-                            if ar.status_code == 200 and ar.headers.get("Content-Type", "").startswith("image"):
-                                mime = ar.headers["Content-Type"].split(";")[0]
-                                art_data_uri = f"data:{mime};base64," + base64.b64encode(ar.content).decode()
-                    except Exception:
-                        pass
-                    self.state_data["local_arturl"] = art_data_uri
+                    # Only re-read when the file changes. This prevents cover flicker
+                    # when Gemini resolves the title and track_key changes on the same file.
+                    _last_art_uri = self.state_data.get("_last_art_uri", "")
+                    if input_uri != _last_art_uri:
+                        # New file — clear old art and re-read
+                        self.state_data["_last_art_uri"] = input_uri
+                        art_data_uri = ""
+                        vlc_art_url = meta.get("artwork_url", "")
+                        try:
+                            if vlc_art_url and vlc_art_url.startswith("file:///"):
+                                import base64, mimetypes
+                                art_path = urllib.parse.unquote(vlc_art_url[8:]).replace("/", os.sep)
+                                if os.path.isfile(art_path):
+                                    mime = mimetypes.guess_type(art_path)[0] or "image/jpeg"
+                                    with open(art_path, "rb") as af:
+                                        art_data_uri = f"data:{mime};base64," + base64.b64encode(af.read()).decode()
+                            if not art_data_uri:
+                                import base64
+                                vlc_host = self.config.get("vlc_host", "localhost")
+                                vlc_port = self.config.get("vlc_port", 8080)
+                                vlc_pw = self.config.get("vlc_password", "")
+                                ar = requests.get(
+                                    f"http://{vlc_host}:{vlc_port}/art",
+                                    auth=HTTPBasicAuth("", vlc_pw), timeout=2
+                                )
+                                if ar.status_code == 200 and ar.headers.get("Content-Type", "").startswith("image"):
+                                    mime = ar.headers["Content-Type"].split(";")[0]
+                                    art_data_uri = f"data:{mime};base64," + base64.b64encode(ar.content).decode()
+                        except Exception:
+                            pass
+                        self.state_data["local_arturl"] = art_data_uri
+                    # else: same file, keep existing local_arturl (avoids flicker on Gemini title resolve)
 
                     # Codec Parsing & Quality Tags
                     quality = ""
@@ -1390,12 +1395,24 @@ class RPCBackend:
                             kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
 
                             ep_str = self.state_data.get("episode_str", "")
+                            _meta = self.state_data.get("metadata") or {}
+                            rating = _meta.get("rating") or _meta.get("imdb_rating") or ""
+                            # Format rating: Jikan gives float (8.5), TVMaze gives float too
+                            if rating:
+                                try:
+                                    rating = str(round(float(rating), 1))
+                                except (ValueError, TypeError):
+                                    rating = str(rating)
+                            rating_str = f" | ⭐ {rating}" if rating else ""
+                            state_str = f"{ep_str}{rating_str}"
                             if self.state_data["playback_state"] == "paused":
-                                kwargs["state"] = f"Paused | {ep_str}"
+                                kwargs["state"] = f"⏸ Paused | {state_str}" if state_str else "⏸ Paused"
                             else:
-                                kwargs["state"] = ep_str
+                                kwargs["state"] = state_str
 
-                            kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"])
+                            genres = _meta.get("genres", [])
+                            genre_str = ", ".join(genres[:2]) if isinstance(genres, list) else ""
+                            kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + (f" • {genre_str}" if genre_str else "")
 
                         # Assets — ensure_https() forces https:// so Discord accepts the URL.
                         # (Discord silently ignores http:// poster URLs, showing the VLC logo instead.)
