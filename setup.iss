@@ -1,6 +1,6 @@
 [Setup]
 AppName=VLC RPC
-AppVersion=4.4.0
+AppVersion=4.4.1
 DefaultDirName={pf}\VLC RPC
 DefaultGroupName=VLC RPC
 OutputDir=dist

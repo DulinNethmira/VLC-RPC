@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.4.0"
+CURRENT_VERSION = "4.4.1"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1027,7 +1027,7 @@ class RPCBackend:
             pass
 
 
-    def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist):
+    def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist, input_uri=""):
         """Fetch metadata in a background thread so the main loop stays fast."""
         try:
             season_num = None
@@ -1084,18 +1084,20 @@ class RPCBackend:
                 self.metadata_cache[cache_key] = metadata
                 self.save_metadata_cache()
 
-            current_title = self.state_data.get("cleaned_title") or self.state_data.get("title")
-            current_key = (
-                f"{self.state_data.get('media_type', 'movie')}:{current_title}:{self.state_data.get('artist', '')}"
-                if self.state_data.get("is_music")
-                else f"{self.state_data.get('media_type', 'movie')}:{current_title}:{self.state_data.get('episode_str', '')}"
+            # Only apply metadata if the user is still on the same file.
+            # Use input_uri (the file path) rather than rebuilding current_key from
+            # volatile state — this prevents the race where track_key has moved on
+            # but input_uri hasn't changed (same file, title just got resolved by Gemini).
+            still_same_file = (
+                not input_uri  # backwards compat: old calls without input_uri always apply
+                or self.state_data.get("_last_art_uri", "") == input_uri
             )
-            if current_key == cache_key:
+            if still_same_file:
                 self.state_data["metadata"] = metadata
                 self.state_data["local_image_path"] = metadata.get("image_url") if metadata else None
                 self.state_data["status_message"] = "Metadata loaded successfully."
-        except Exception:
-            self.state_data["status_message"] = "Metadata fetch failed."
+        except Exception as e:
+            self.state_data["status_message"] = f"Metadata fetch failed: {e}"
 
 
     def rpc_worker(self):
@@ -1267,10 +1269,11 @@ class RPCBackend:
                     self.state_data["cleaned_title"] = cleaned_title
                     # CRITICAL: update episode_str every poll cycle so check_auto_sync always has it
                     self.state_data["episode_str"] = episode_str
-                    # current_plid is VLC's internal playlist-item ID — guaranteed to
-                    # change when the user moves to the next episode, even if the
-                    # filename/title metadata hasn't refreshed yet.
-                    track_key = f"{current_plid}:{input_uri}:{file_name}:{self.state_data['title']}:{cleaned_title}:{episode_str}:{self.state_data['artist']}"
+                    # track_key only uses STABLE identifiers: playlist ID, file path, filename,
+                    # and the Gemini-resolved title+episode. Raw VLC tag title/artist are
+                    # deliberately excluded — they update mid-playback and would cause
+                    # endless spurious metadata re-fetches for the same file.
+                    track_key = f"{current_plid}:{input_uri}:{file_name}:{cleaned_title}:{episode_str}"
 
                     if self.force_update_flag:
                         last_track_key = None
@@ -1303,7 +1306,7 @@ class RPCBackend:
                                 self.state_data["local_image_path"] = None
                                 self.state_data["status_message"] = "Fetching metadata..."
                                 self.log(f"Playing '{cleaned_title}' (Fetching metadata...)")
-                                fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"])
+                                fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], input_uri)
                                 threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
                         else:
                             self.state_data["metadata"] = None
