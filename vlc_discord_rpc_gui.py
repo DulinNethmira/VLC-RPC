@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.5.3"
+CURRENT_VERSION = "4.5.4"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1148,6 +1148,14 @@ class RPCBackend:
 
             elif media_type == "tv_show":
                 metadata = prepared(self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num))
+                
+                # If TVMaze found it but it's classified as Anime/Animation, 
+                # AniList usually has vastly superior covers, genres, and ratings.
+                if metadata and any(g.lower() in ("anime", "animation") for g in metadata.get("genres", [])):
+                    anilist_meta = prepared(self.fetch_anilist_metadata(search_title))
+                    if anilist_meta and anilist_meta.get("image_url"):
+                        metadata = anilist_meta
+
                 if not metadata or not metadata.get("image_url"):
                     metadata = prepared(self.fetch_omdb_metadata(search_title, year))
                 if not metadata or not metadata.get("image_url"):
@@ -1517,7 +1525,11 @@ class RPCBackend:
                             kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
                             _meta = self.state_data.get("metadata") or {}
                             genres = _meta.get("genres", [])
-                            genre_str = ", ".join(genres[:2]) if isinstance(genres, list) else str(genres)
+                            if isinstance(genres, list):
+                                genres = [g for g in genres if g.lower() not in ("anime", "animation")]
+                                genre_str = ", ".join(genres[:3])
+                            else:
+                                genre_str = str(genres)
                             rating = _meta.get("rating") or _meta.get("imdb_rating") or ""
                             if rating and genre_str:
                                 kwargs["state"] = f"{genre_str} | Rating {rating}"
@@ -1550,7 +1562,11 @@ class RPCBackend:
                                 kwargs["state"] = state_str
 
                             genres = _meta.get("genres", [])
-                            genre_str = ", ".join(genres[:2]) if isinstance(genres, list) else ""
+                            if isinstance(genres, list):
+                                genres = [g for g in genres if g.lower() not in ("anime", "animation")]
+                                genre_str = ", ".join(genres[:3])
+                            else:
+                                genre_str = ""
                             kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + (f" • {genre_str}" if genre_str else "")
 
                         # Assets — ensure_https() forces https:// so Discord accepts the URL.
@@ -1569,6 +1585,8 @@ class RPCBackend:
                         if self.state_data["playback_state"] == "playing":
                             kwargs["small_image"] = play_key
                             kwargs["small_text"] = "Playing"
+                            if self.state_data.get("time", 0) > 0:
+                                kwargs["start"] = int(time.time()) - self.state_data["time"]
                         else:
                             kwargs["small_image"] = pause_key
                             kwargs["small_text"] = "Paused"
