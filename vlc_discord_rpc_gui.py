@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.5.4"
+CURRENT_VERSION = "4.5.5"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -42,7 +42,8 @@ DEFAULT_CONFIG = {
     "small_image_text": "Playing",
     "small_image_paused_key": "pause",
     "small_image_paused_text": "Paused",
-    "gemini_api_key": ""
+    "gemini_api_key": "",
+    "discord_webhook_url": ""
 }
 
 def query_gemini_title(filename, api_key):
@@ -563,7 +564,10 @@ class RPCBackend:
             pass
 
     def send_webhook_log(self, message):
-        webhook_url = "https://discord.com/api/webhooks/1524076131035119740/EmuI1-4_-ciqZ-GjvV2NdXY-sVYYsNqVFe9fkdu57YkVV0xe5qlY3VfPk63hci2wlv8w"
+        webhook_url = self.config.get("discord_webhook_url", "").strip()
+        if not webhook_url:
+            return
+            
         try:
             payload = {"content": f"**[VLC RPC Tracker]** {message}"}
             response = requests.post(webhook_url, json=payload, timeout=5)
@@ -1386,6 +1390,10 @@ class RPCBackend:
                     self.state_data["is_music"] = is_music
                     self.state_data["cleaned_title"] = cleaned_title
                     # CRITICAL: update episode_str every poll cycle so check_auto_sync always has it
+                    # For music files, guessit may return episode_str="Movie"; clear it so the
+                    # frontend shows the artist name instead of a misleading "Movie" subtitle.
+                    if is_music and episode_str and "Movie" in episode_str:
+                        episode_str = ""
                     self.state_data["episode_str"] = episode_str
                     # track_key only uses STABLE identifiers: playlist ID, file path, filename,
                     # and the Gemini-resolved title+episode. Raw VLC tag title/artist are
@@ -1450,27 +1458,45 @@ class RPCBackend:
                             self.log("VLC stopped playback.")
                 else:
                     self.state_data["vlc_connected"] = False
+                    self.state_data["playback_state"] = "stopped"
+                    self.state_data["title"] = ""
+                    self.state_data["cleaned_title"] = ""
+                    self.state_data["episode_str"] = ""
                     self.state_data["metadata"] = None
                     self.state_data["local_image_path"] = None
                     self.state_data["local_arturl"] = ""
+                    self.state_data["_last_art_key"] = ""
+                    self.state_data["_last_art_uri"] = ""
 
             except requests.exceptions.RequestException:
                 if self.state_data.get("vlc_connected"):
                     self.log("VLC connection lost.")
                 # VLC is unreachable — mark disconnected and hibernate briefly
                 self.state_data["vlc_connected"] = False
+                self.state_data["playback_state"] = "stopped"
+                self.state_data["title"] = ""
+                self.state_data["cleaned_title"] = ""
+                self.state_data["episode_str"] = ""
                 self.state_data["metadata"] = None
                 self.state_data["local_image_path"] = None
                 self.state_data["local_arturl"] = ""
+                self.state_data["_last_art_key"] = ""
+                self.state_data["_last_art_uri"] = ""
                 time.sleep(5)
                 # Fall through to Discord reconnect logic below
             except Exception as e:
                 if self.state_data.get("vlc_connected"):
                     self.log(f"VLC error: {e}")
                 self.state_data["vlc_connected"] = False
+                self.state_data["playback_state"] = "stopped"
+                self.state_data["title"] = ""
+                self.state_data["cleaned_title"] = ""
+                self.state_data["episode_str"] = ""
                 self.state_data["metadata"] = None
                 self.state_data["local_image_path"] = None
                 self.state_data["local_arturl"] = ""
+                self.state_data["_last_art_key"] = ""
+                self.state_data["_last_art_uri"] = ""
 
             desired_client_id = self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID
 
@@ -1531,12 +1557,18 @@ class RPCBackend:
                             else:
                                 genre_str = str(genres)
                             rating = _meta.get("rating") or _meta.get("imdb_rating") or ""
+                            if rating:
+                                try:
+                                    rating = str(round(float(rating), 1))
+                                except (ValueError, TypeError):
+                                    rating = str(rating)
+                                    
                             if rating and genre_str:
-                                kwargs["state"] = f"{genre_str} | Rating {rating}"
+                                kwargs["state"] = f"{genre_str} | ⭐ {rating}"
                             elif genre_str:
                                 kwargs["state"] = f"Genres: {genre_str}"
                             elif rating:
-                                kwargs["state"] = f"Rating {rating}"
+                                kwargs["state"] = f"⭐ {rating}"
 
                             desc = self.state_data.get("metadata", {}).get("description", "") if self.state_data.get("metadata") else ""
                             kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + (f" • {desc}" if desc else "")
@@ -1547,14 +1579,14 @@ class RPCBackend:
 
                             ep_str = self.state_data.get("episode_str", "")
                             _meta = self.state_data.get("metadata") or {}
-                            rating = _meta.get("rating") or _meta.get("imdb_rating") or ""
+                            rating = _meta.get("episode_rating") or _meta.get("rating") or _meta.get("imdb_rating") or ""
                             # Format rating: Jikan gives float (8.5), TVMaze gives float too
                             if rating:
                                 try:
                                     rating = str(round(float(rating), 1))
                                 except (ValueError, TypeError):
                                     rating = str(rating)
-                            rating_str = f" | Rating {rating}" if rating else ""
+                            rating_str = f" | ⭐ {rating}" if rating else ""
                             state_str = f"{ep_str}{rating_str}"
                             if self.state_data["playback_state"] == "paused":
                                 kwargs["state"] = f"Paused | {state_str}" if state_str else "Paused"
