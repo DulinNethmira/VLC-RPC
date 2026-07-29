@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.6.1"
+CURRENT_VERSION = "4.6.2"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1108,17 +1108,23 @@ class RPCBackend:
             if result.returncode != 0 or not result.stdout:
                 return
 
-            # Upload the JPEG bytes to 0x0.st (free, no auth, returns a URL)
+            # Upload to tmpfiles.org (free, no auth file host)
             upload = requests.post(
-                "https://0x0.st",
+                "https://tmpfiles.org/api/v1/upload",
                 files={"file": ("snapshot.jpg", result.stdout, "image/jpeg")},
                 timeout=15
             )
             if upload.status_code == 200:
-                url = upload.text.strip()
-                if url.startswith("http"):
+                json_resp = upload.json()
+                url = json_resp.get("data", {}).get("url", "")
+                if url:
+                    url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
                     self.state_data["scene_snapshot_url"] = ensure_https(url)
                     self.log(f"[Snapshot] Uploaded scene snapshot: {url}")
+                else:
+                    self.log(f"[Snapshot] Upload failed: Invalid response format")
+            else:
+                self.log(f"[Snapshot] Upload failed: {upload.status_code} - {upload.text}")
         except FileNotFoundError:
             # ffmpeg not on PATH — disable silently so we don't spam the log
             self.log("[Snapshot] ffmpeg not found on PATH — scene snapshots disabled.")
