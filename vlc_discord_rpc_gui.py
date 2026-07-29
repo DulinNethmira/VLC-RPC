@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.6.0"
+CURRENT_VERSION = "4.6.1"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
     "small_image_paused_text": "Paused",
     "gemini_api_key": "",
     "discord_webhook_url": "",
-    "scene_snapshots": false
+    "scene_snapshots": False
 }
 
 def query_gemini_title(filename, api_key):
