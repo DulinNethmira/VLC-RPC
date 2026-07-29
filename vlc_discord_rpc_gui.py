@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.5.5"
+CURRENT_VERSION = "4.6.0"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -43,7 +43,8 @@ DEFAULT_CONFIG = {
     "small_image_paused_key": "pause",
     "small_image_paused_text": "Paused",
     "gemini_api_key": "",
-    "discord_webhook_url": ""
+    "discord_webhook_url": "",
+    "scene_snapshots": false
 }
 
 def query_gemini_title(filename, api_key):
@@ -415,10 +416,13 @@ class RPCBackend:
             "update_available": False,
             "update_version": "",
             "update_download_url": "",
-            "update_changelog": ""
+            "update_changelog": "",
+            "scene_snapshot_url": ""
         }
         self.force_update_flag = False
         self.scrobbled_episodes = set()
+        self.anilist_username_cache = None   # None = not fetched yet; False = fetch failed
+        self._last_snapshot_time = 0         # epoch time of last scene snapshot
         self.last_sync_time = 0
         self.window = None
         self.stop_event = threading.Event()
@@ -1054,6 +1058,75 @@ class RPCBackend:
         metadata["image_url"] = image_url
         return metadata
 
+    def fetch_anilist_username(self):
+        """Fetch the AniList username for the connected account. Cached after first success.
+        Returns the username string, or None if not connected / fetch fails."""
+        if self.anilist_username_cache is not None:
+            # False means we already tried and failed — don't retry every poll
+            return self.anilist_username_cache if self.anilist_username_cache else None
+        token = self.config.get("anilist_token", "").strip()
+        if not token:
+            self.anilist_username_cache = False
+            return None
+        try:
+            r = requests.post(
+                "https://graphql.anilist.co",
+                json={"query": "query { Viewer { name } }"},
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                timeout=8
+            )
+            if r.status_code == 200:
+                name = (r.json().get("data") or {}).get("Viewer", {}).get("name", "")
+                if name:
+                    self.anilist_username_cache = name
+                    self.log(f"[AniList] Cached username: {name}")
+                    return name
+        except Exception:
+            pass
+        self.anilist_username_cache = False
+        return None
+
+    def _capture_scene_snapshot(self, file_path, time_secs):
+        """Use ffmpeg to grab the current video frame and upload it to 0x0.st.
+        Updates state_data['scene_snapshot_url'] on success. Silently swallows all errors."""
+        import subprocess
+        try:
+            # Build the ffmpeg command: seek to time_secs, output 1 JPEG frame to stdout
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(int(time_secs)),
+                "-i", file_path,
+                "-vframes", "1",
+                "-vf", "scale=1280:-1",
+                "-f", "image2pipe",
+                "-vcodec", "mjpeg",
+                "pipe:1"
+            ]
+            result = subprocess.run(
+                cmd, capture_output=True, timeout=15
+            )
+            if result.returncode != 0 or not result.stdout:
+                return
+
+            # Upload the JPEG bytes to 0x0.st (free, no auth, returns a URL)
+            upload = requests.post(
+                "https://0x0.st",
+                files={"file": ("snapshot.jpg", result.stdout, "image/jpeg")},
+                timeout=15
+            )
+            if upload.status_code == 200:
+                url = upload.text.strip()
+                if url.startswith("http"):
+                    self.state_data["scene_snapshot_url"] = ensure_https(url)
+                    self.log(f"[Snapshot] Uploaded scene snapshot: {url}")
+        except FileNotFoundError:
+            # ffmpeg not on PATH — disable silently so we don't spam the log
+            self.log("[Snapshot] ffmpeg not found on PATH — scene snapshots disabled.")
+            # Turn off the feature so we don't keep trying
+            self.config["scene_snapshots"] = False
+        except Exception as e:
+            self.log(f"[Snapshot] Capture failed (non-fatal): {e}")
+
     def set_window(self, window):
         self.window = window
 
@@ -1467,6 +1540,7 @@ class RPCBackend:
                     self.state_data["local_arturl"] = ""
                     self.state_data["_last_art_key"] = ""
                     self.state_data["_last_art_uri"] = ""
+                    self.state_data["scene_snapshot_url"] = ""
 
             except requests.exceptions.RequestException:
                 if self.state_data.get("vlc_connected"):
@@ -1482,6 +1556,7 @@ class RPCBackend:
                 self.state_data["local_arturl"] = ""
                 self.state_data["_last_art_key"] = ""
                 self.state_data["_last_art_uri"] = ""
+                self.state_data["scene_snapshot_url"] = ""
                 time.sleep(5)
                 # Fall through to Discord reconnect logic below
             except Exception as e:
@@ -1497,6 +1572,7 @@ class RPCBackend:
                 self.state_data["local_arturl"] = ""
                 self.state_data["_last_art_key"] = ""
                 self.state_data["_last_art_uri"] = ""
+                self.state_data["scene_snapshot_url"] = ""
 
             desired_client_id = self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID
 
@@ -1603,11 +1679,36 @@ class RPCBackend:
 
                         # Assets — ensure_https() forces https:// so Discord accepts the URL.
                         # (Discord silently ignores http:// poster URLs, showing the VLC logo instead.)
-                        # The broken music override is removed — metadata image_url (iTunes artwork) is used directly.
                         if self.state_data["metadata"] and self.state_data["metadata"].get("image_url"):
                             kwargs["large_image"] = ensure_https(self.state_data["metadata"]["image_url"])
                         else:
                             kwargs["large_image"] = self.config.get("large_image_key", "vlc")
+
+                        # Scene Snapshot override: replace poster with live video frame if available
+                        snapshot_url = self.state_data.get("scene_snapshot_url", "")
+                        if self.config.get("scene_snapshots") and snapshot_url:
+                            kwargs["large_image"] = snapshot_url
+
+                        # Trigger a new scene snapshot if due (every 5 min while playing, non-music only)
+                        if (
+                            self.config.get("scene_snapshots")
+                            and media_type != "music"
+                            and self.state_data["playback_state"] == "playing"
+                            and time.time() - self._last_snapshot_time >= 300
+                        ):
+                            input_uri_val = self.state_data.get("_last_art_uri", "")
+                            time_secs = self.state_data.get("time", 0)
+                            # Resolve local file path from file:// URI
+                            local_path = ""
+                            if input_uri_val.startswith("file:///"):
+                                local_path = urllib.parse.unquote(input_uri_val[8:]).replace("/", os.sep)
+                            if local_path and os.path.isfile(local_path) and time_secs > 30:
+                                self._last_snapshot_time = time.time()
+                                threading.Thread(
+                                    target=self._capture_scene_snapshot,
+                                    args=(local_path, time_secs),
+                                    daemon=True
+                                ).start()
 
                         play_key = self.config.get("small_image_key", "play")
                         pause_key = self.config.get("small_image_paused_key", "pause")
@@ -1628,17 +1729,40 @@ class RPCBackend:
                             kwargs["start"] = current_time - self.state_data["time"]
                             kwargs["end"] = kwargs["start"] + self.state_data["length"]
 
-                        # Discord Interaction Buttons
-                        # Use `or {}` guard: state_data["metadata"] is None when loading,
-                        # dict.get(key, default) returns the default only when the key is ABSENT.
-                        # Without `or {}`, None.get("anilistId") raises AttributeError silently.
+                        # ── Discord Interaction Buttons ──────────────────────────────────────────
+                        # Discord max = 2 buttons. Layout:
+                        #   Button 1: "Watch Trailer"  (YouTube search — always shown for non-music)
+                        #   Button 2: "My AniList"     if AniList connected
+                        #             "View on AniList" for anime with anilistId  (fallback)
+                        #             "View on IMDb"    for movies                (fallback)
+                        # Use `or {}` guard: state_data["metadata"] is None when loading.
                         buttons = []
                         _btn_meta = self.state_data.get("metadata") or {}
-                        anilist_id = _btn_meta.get("anilistId")
-                        if media_type == "anime" and anilist_id:
-                            buttons.append({"label": "View on AniList", "url": f"https://anilist.co/anime/{anilist_id}"})
-                        elif media_type == "movie" and _btn_meta.get("page_url"):
-                            buttons.append({"label": "View IMDb", "url": _btn_meta["page_url"]})
+                        display_title = self.state_data.get("cleaned_title") or self.state_data.get("title", "")
+
+                        # Button 1 — Watch Trailer (non-music only)
+                        if media_type != "music" and display_title:
+                            trailer_query = urllib.parse.quote(f"{display_title} official trailer")
+                            buttons.append({
+                                "label": "Watch Trailer",
+                                "url": f"https://www.youtube.com/results?search_query={trailer_query}"
+                            })
+
+                        # Button 2 — AniList profile (if connected) or content-specific link
+                        anilist_username = self.fetch_anilist_username()
+                        if anilist_username:
+                            buttons.append({
+                                "label": "My AniList Profile",
+                                "url": f"https://anilist.co/user/{urllib.parse.quote(anilist_username)}/"
+                            })
+                        else:
+                            anilist_id = _btn_meta.get("anilistId")
+                            if media_type == "anime" and anilist_id:
+                                buttons.append({"label": "View on AniList", "url": f"https://anilist.co/anime/{anilist_id}"})
+                            elif media_type == "movie" and _btn_meta.get("page_url"):
+                                buttons.append({"label": "View on IMDb", "url": _btn_meta["page_url"]})
+                            elif media_type == "tv_show" and _btn_meta.get("page_url"):
+                                buttons.append({"label": "View on TVmaze", "url": _btn_meta["page_url"]})
 
                         if buttons:
                             kwargs["buttons"] = buttons
