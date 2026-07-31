@@ -23,10 +23,14 @@ VLC RPC seamlessly connects your VLC Media Player to Discord. It shows your frie
 - **Media Type Detection** — Automatically classifies content as **Anime**, **Movie**, **TV Show**, or **Music** and routes to the appropriate metadata provider.
 
 ### 📡 Rich Discord Presence
+- **Live Scene Snapshots** — Takes a live frame capture from your local video (Anime/Movies) using FFmpeg and uploads it to display as the rich presence cover art instead of generic posters.
 - **Dynamic Status** — Shows "Watching", "Listening", or "Paused" with live progress bars and timestamps.
-- **Media Artwork** — Fetches high-quality posters from OMDb, Jikan (MyAnimeList), TVmaze, iTunes, and Wikipedia.
+- **Media Artwork** — Fetches high-quality posters from OMDb, Jikan (MyAnimeList), TVmaze, iTunes, and Wikipedia (when Snapshots are disabled).
 - **Interactive Buttons** — Adds clickable AniList/IMDb links directly on your Discord profile when available.
 - **Codec Badges** — Displays quality tags (4K, 1080p, HDR) and multi-audio track indicators.
+
+### ⚡ Performance & Architecture
+- **Background Metadata Processing** — Network requests to metadata providers (OMDb, Jikan, Gemini) are run asynchronously to ensure the UI and RPC updates never freeze or lag.
 
 ### 📺 AniList Integration
 - **Secure OAuth 2.0** — Full Authorization Code Flow with a local callback server. Your credentials never leave your machine.

@@ -28,3 +28,9 @@ debug.log
 scratch.zip
 patch_*.py
 make_pdf.py
+
+# App Data
+config.json
+history.db
+metadata_cache.json
+covers_cache/

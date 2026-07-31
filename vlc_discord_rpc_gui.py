@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.6.2"
+CURRENT_VERSION = "4.6.7"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -208,6 +208,10 @@ Filename:
 {filename}
 """
     def _parse_response(text):
+        if text.startswith("```"):
+            text = text.strip("`").strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
         parsed = json.loads(text)
         title = parsed.get("title")
         season = parsed.get("season")
@@ -232,7 +236,7 @@ Filename:
             text = r.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
             return _parse_response(text)
     except Exception as e:
-        print(f"Gemini AI Error: {e}")
+        pass
     return None, None, None
 
 def clean_title(title):
@@ -371,6 +375,7 @@ def load_config():
                     config[k] = v
             return config
     except Exception:
+        return None
         return DEFAULT_CONFIG.copy()
 
 def save_config(config):
@@ -392,7 +397,6 @@ class RPCBackend:
         self.config = DEFAULT_CONFIG.copy()
         self.config.update(load_config())
         self.metadata_cache = {}
-        self.gemini_cache = {}
         self.gemini_fail_times = {}  # tracks last failure time per filename for retry logic
         self.state_data = {
             "current_version": CURRENT_VERSION,
@@ -431,17 +435,28 @@ class RPCBackend:
         self.history = self.load_history()
         self.setup_database()
         self.metadata_cache = self.load_metadata_cache()
+        
+        # Load gemini cache
+        self.gemini_cache_file = 'gemini_cache.json'
+        self.gemini_cache = {}
+        try:
+            import json, os
+            if os.path.exists(self.gemini_cache_file):
+                with open(self.gemini_cache_file, 'r', encoding='utf-8') as gcf:
+                    self.gemini_cache = json.load(gcf)
+                    # Convert arrays back to tuples since JSON arrays are loaded as lists
+                    for k, v in self.gemini_cache.items():
+                        if isinstance(v, list):
+                            self.gemini_cache[k] = tuple(v)
+        except Exception:
+            pass
+
         self.worker_thread = threading.Thread(target=self.rpc_worker, daemon=True)
         self.worker_thread.start()
 
     def log(self, msg):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         formatted = f"[{timestamp}] {msg}"
-        try:
-            print(formatted)
-        except UnicodeEncodeError:
-            encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-            print(formatted.encode(encoding, errors='replace').decode(encoding, errors='replace'))
         if self.window:
             try:
                 self.window.evaluate_js(f"if(window.addLog) window.addLog({json.dumps(formatted)});")
@@ -461,6 +476,7 @@ class RPCBackend:
             with open(history_path, "r") as f:
                 return json.load(f)
         except Exception:
+            return None
             return []
 
     def save_history(self):
@@ -483,7 +499,7 @@ class RPCBackend:
         if len(self.anilist_logs) > 200:
             self.anilist_logs = self.anilist_logs[-200:]
         try:
-            print(f"[AniList] {entry}".encode('utf-8', errors='replace').decode('utf-8'))
+            pass
         except Exception:
             pass
         self.send_webhook_log(msg)
@@ -511,6 +527,7 @@ class RPCBackend:
                 try:
                     return tuple(int(x) for x in v.strip().split("."))
                 except Exception:
+                    return None
                     return (0,)
 
             if _parse(latest_tag) > _parse(CURRENT_VERSION):
@@ -576,9 +593,9 @@ class RPCBackend:
             payload = {"content": f"**[VLC RPC Tracker]** {message}"}
             response = requests.post(webhook_url, json=payload, timeout=5)
             if response.status_code not in (204, 200, 201):
-                print(f"[Webhook] Failed with status {response.status_code}: {response.text[:200]}")
+                pass
         except Exception as e:
-            print(f"[Webhook] Exception: {e}")
+            pass
             # swallow to avoid breaking main flow
             pass
 
@@ -715,6 +732,7 @@ class RPCBackend:
         except PermissionError:
             return False
         except Exception as e:
+            pass
             self.anilist_log(f"[Crash] sync_anilist error: {e}")
             return False
 
@@ -778,6 +796,7 @@ class RPCBackend:
             else:
                 self.send_webhook_log(f"❌ **Discord Widget Failed:** HTTP {r2.status_code} — `{r2.text[:150]}`")
         except Exception as e:
+            pass
             self.send_webhook_log(f"❌ **Discord Widget Crashed:** `{e}`")
             
     def check_auto_sync(self):
@@ -928,6 +947,7 @@ class RPCBackend:
                                 backend_ref.send_webhook_log(f"❌ **AniList OAuth Failed:** {err_msg}")
                                 self._respond(400, f'{{"success": false, "error": "{err_msg}"}}'.encode(), "application/json")
                         except Exception as e:
+                            pass
                             backend_ref.send_webhook_log(f"❌ **AniList OAuth Error:** {str(e)}")
                             self._respond(500, f'{{"success": false, "error": "{str(e)}"}}'.encode(), "application/json")
                             
@@ -949,7 +969,7 @@ class RPCBackend:
             webbrowser.open(AUTH_URL)
             server.serve_forever()
         except Exception as e:
-            print(f"[AniList OAuth] Server error: {e}")
+            self.log(f"OAuth Server Error: {e}")
 
 
     def start_discord_oauth(self):
@@ -1009,6 +1029,7 @@ class RPCBackend:
             color = img.getpixel((0, 0))
             return f"rgba({color[0]}, {color[1]}, {color[2]}, 0.8)"
         except Exception:
+            return None
             return None
 
     def normalize_cover_url(self, url):
@@ -1087,10 +1108,16 @@ class RPCBackend:
         return None
 
     def _capture_scene_snapshot(self, file_path, time_secs):
-        """Use ffmpeg to grab the current video frame and upload it to 0x0.st.
-        Updates state_data['scene_snapshot_url'] on success. Silently swallows all errors."""
+        """Use ffmpeg to grab the current video frame and upload it to Imgur.
+        Updates state_data['scene_snapshot_url'] on success. Logs errors to Live Logs."""
         import subprocess
         try:
+            # On Windows, CREATE_NO_WINDOW ensures ffmpeg doesn't flash a console
+            # window and also works correctly in --noconsole PyInstaller builds.
+            creationflags = 0
+            if hasattr(subprocess, 'CREATE_NO_WINDOW'):
+                creationflags = subprocess.CREATE_NO_WINDOW
+
             # Build the ffmpeg command: seek to time_secs, output 1 JPEG frame to stdout
             cmd = [
                 "ffmpeg", "-y",
@@ -1103,22 +1130,25 @@ class RPCBackend:
                 "pipe:1"
             ]
             result = subprocess.run(
-                cmd, capture_output=True, timeout=15
+                cmd, capture_output=True, timeout=15,
+                creationflags=creationflags
             )
             if result.returncode != 0 or not result.stdout:
+                stderr_msg = result.stderr.decode('utf-8', errors='replace')[-300:] if result.stderr else 'no output'
+                self.log(f"[Snapshot] ffmpeg failed (code {result.returncode}): {stderr_msg}")
                 return
 
-            # Upload to tmpfiles.org (free, no auth file host)
+            # Upload to Imgur (free, direct hotlinking)
             upload = requests.post(
-                "https://tmpfiles.org/api/v1/upload",
-                files={"file": ("snapshot.jpg", result.stdout, "image/jpeg")},
+                "https://api.imgur.com/3/image",
+                headers={"Authorization": "Client-ID 546c25a59c58ad7"},
+                files={"image": ("snapshot.jpg", result.stdout, "image/jpeg")},
                 timeout=15
             )
             if upload.status_code == 200:
                 json_resp = upload.json()
-                url = json_resp.get("data", {}).get("url", "")
+                url = json_resp.get("data", {}).get("link", "")
                 if url:
-                    url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
                     self.state_data["scene_snapshot_url"] = ensure_https(url)
                     self.log(f"[Snapshot] Uploaded scene snapshot: {url}")
                 else:
@@ -1149,6 +1179,7 @@ class RPCBackend:
             with open(cache_path, "r") as f:
                 return json.load(f)
         except Exception:
+            return None
             return {}
 
     def save_metadata_cache(self):
@@ -1347,6 +1378,7 @@ class RPCBackend:
                         self.state_data["_last_art_uri"] = input_uri
                         self.state_data["metadata"] = None
                         self.state_data["local_image_path"] = None
+                        self.state_data["scene_snapshot_url"] = ""  # clear snapshot for new file
                         art_data_uri = ""
                         vlc_art_url = meta.get("artwork_url", "")
                         try:
@@ -1419,7 +1451,7 @@ class RPCBackend:
                         # Spawn a new thread if: never tried, OR last failure was >60s ago
                         should_try = (
                             raw_name not in self.gemini_cache
-                            or (cached is None and time.time() - last_fail > 60)
+                            or (cached is None and time.time() - last_fail > 300)
                         )
                         if should_try:
                             self.gemini_cache[raw_name] = "pending"
@@ -1428,6 +1460,12 @@ class RPCBackend:
                                 if t:
                                     self.gemini_cache[name] = (t, e, mt or "")
                                     self.anilist_log(f"[Gemini AI] Match: {t} {e}")
+                                    try:
+                                        import json
+                                        with open(self.gemini_cache_file, 'w', encoding='utf-8') as gcf:
+                                            json.dump(self.gemini_cache, gcf)
+                                    except Exception:
+                                        pass
                                 else:
                                     # Don't permanently block — allow retry after 60s
                                     self.gemini_cache[name] = None
@@ -1566,6 +1604,7 @@ class RPCBackend:
                 time.sleep(5)
                 # Fall through to Discord reconnect logic below
             except Exception as e:
+                pass
                 if self.state_data.get("vlc_connected"):
                     self.log(f"VLC error: {e}")
                 self.state_data["vlc_connected"] = False
@@ -1695,20 +1734,64 @@ class RPCBackend:
                         if self.config.get("scene_snapshots") and snapshot_url:
                             kwargs["large_image"] = snapshot_url
 
-                        # Trigger a new scene snapshot if due (every 5 min while playing, non-music only)
+                        # Trigger a new scene snapshot if due.
+                        # First snapshot for a new file fires after 30s.
+                        # Subsequent snapshots of the same file refresh every 5 minutes.
                         if (
                             self.config.get("scene_snapshots")
                             and media_type != "music"
                             and self.state_data["playback_state"] == "playing"
-                            and time.time() - self._last_snapshot_time >= 300
                         ):
-                            input_uri_val = self.state_data.get("_last_art_uri", "")
                             time_secs = self.state_data.get("time", 0)
-                            # Resolve local file path from file:// URI
-                            local_path = ""
-                            if input_uri_val.startswith("file:///"):
-                                local_path = urllib.parse.unquote(input_uri_val[8:]).replace("/", os.sep)
-                            if local_path and os.path.isfile(local_path) and time_secs > 30:
+
+                            # Resolve the file path for the current playlist item.
+                            # VLC's meta.url is often empty for local files, so we
+                            # look up the URI in /requests/playlist.json by currentplid.
+                            local_path = getattr(self, '_snapshot_local_path', '')
+                            snap_plid  = getattr(self, '_snapshot_plid', '')
+                            if current_plid != snap_plid:
+                                # currentplid changed — find the URI from the playlist
+                                try:
+                                    pl_url = f"http://{self.config.get('vlc_host','localhost')}:{self.config.get('vlc_port',8080)}/requests/playlist.json"
+                                    pl_r = requests.get(pl_url, auth=HTTPBasicAuth('', self.config.get('vlc_password', '')), timeout=3)
+                                    if pl_r.status_code == 200:
+                                        def _find_uri(node, plid):
+                                            if str(node.get("id", "")) == plid:
+                                                return node.get("uri", "")
+                                            for child in node.get("children", []):
+                                                result = _find_uri(child, plid)
+                                                if result:
+                                                    return result
+                                            return ""
+                                        found_uri = _find_uri(pl_r.json(), current_plid)
+                                        new_path = ""
+                                        if found_uri.startswith("file:///"):
+                                            new_path = urllib.parse.unquote(found_uri[8:]).replace("/", os.sep)
+                                        elif found_uri.startswith("file://localhost/"):
+                                            new_path = urllib.parse.unquote(found_uri[17:]).replace("/", os.sep)
+                                        self._snapshot_local_path = new_path
+                                        self._snapshot_plid = current_plid
+                                        local_path = new_path
+                                        self.log(f"[Snapshot] Resolved file path: {new_path or '(empty)'}")
+                                        # Reset snapshot timer for new file
+                                        self._last_snapshot_time = 0
+                                        self.state_data["scene_snapshot_url"] = ""
+                                except Exception as _pl_e:
+                                    self.log(f"[Snapshot] Could not resolve file path: {_pl_e}")
+
+                            # Reset timer when we detect a new file
+                            last_snap_file = getattr(self, '_last_snapshot_file', '')
+                            if local_path and local_path != last_snap_file:
+                                self._last_snapshot_file = local_path
+                                self._last_snapshot_time = 0  # force a snapshot soon
+
+                            # First snap: 30s after file starts; subsequent: every 5 minutes
+                            interval = 30 if not self.state_data.get("scene_snapshot_url") else 300
+                            if (
+                                local_path and os.path.isfile(local_path)
+                                and time_secs > 30
+                                and time.time() - self._last_snapshot_time >= interval
+                            ):
                                 self._last_snapshot_time = time.time()
                                 threading.Thread(
                                     target=self._capture_scene_snapshot,
@@ -2085,7 +2168,8 @@ class WebApi:
 
             conn.close()
         except Exception as e:
-            print(f"[get_stats] Error: {e}")
+            pass
+            self.backend.log(f"Stats Error: {e}")
         return stats
 
         
@@ -2095,6 +2179,7 @@ class WebApi:
             save_config(self.backend.config)
             return {"success": True}
         except Exception as e:
+            return None
             return {"success": False, "error": str(e)}
             
     def open_url(self, url):
@@ -2163,6 +2248,7 @@ class WebApi:
                     try:
                         return tuple(int(x) for x in v.strip().split("."))
                     except Exception:
+                        return None
                         return (0,)
 
                 if _parse(latest_tag) > _parse(CURRENT_VERSION):
@@ -2189,6 +2275,7 @@ class WebApi:
                 else:
                     return {"update_available": False, "current_version": CURRENT_VERSION}
             except Exception as e:
+                return None
                 return {"update_available": False, "current_version": CURRENT_VERSION, "error": str(e)}
 
         import concurrent.futures
@@ -2229,8 +2316,8 @@ class WebApi:
                 self.backend.state_data["update_status"] = "ready"
                 self.backend.state_data["update_progress"] = 100
             except Exception as e:
+                pass
                 self.backend.state_data["update_status"] = "error"
-                print(f"[Updater] Download failed: {e}")
 
         threading.Thread(target=_download_task, daemon=True).start()
         return {"success": True}
@@ -2247,6 +2334,7 @@ class WebApi:
                              creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
             os._exit(0)
         except Exception as e:
+            return None
             return {"success": False, "error": str(e)}
 
     def auth_discord_widget(self):
@@ -2293,6 +2381,7 @@ class WebApi:
                 
             return {"success": True, "history": history_list, "total_time": total_time}
         except Exception as e:
+            return None
             return {"success": False, "error": str(e)}
 
 
@@ -2346,8 +2435,7 @@ def setup_tray():
                 winreg.SetValueEx(key, "VLC_RPC", 0, winreg.REG_SZ, cmd)
             winreg.CloseKey(key)
         except Exception as e:
-            print(f"Startup toggle failed: {e}")
-
+            pass
     def is_minimize_to_tray(item):
         return backend.config.get('minimize_to_tray', True)
         

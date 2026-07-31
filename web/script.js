@@ -46,11 +46,12 @@ window.updateState = function(state) {
         idleState.style.display = 'none';
         activeState.style.display = 'flex';
 
-        // Cover image — episode-specific online cover first, fallback to VLC embedded art
+        // Cover image - snapshot first, then episode-specific online cover, fallback to VLC embedded art
         const coverEl = document.getElementById('hero-cover');
+        const snapshotUrl = state.scene_snapshot_url || '';
         const onlineImgUrl = (state.metadata && state.metadata.image_url) || '';
         const localImgUrl = state.local_arturl || '';
-        const imgUrl = onlineImgUrl || localImgUrl || '';
+        const imgUrl = snapshotUrl || onlineImgUrl || localImgUrl || '';
 
         coverEl.onerror = () => {
             if (localImgUrl && coverEl.dataset.fallbackTried !== 'local') {
@@ -202,7 +203,8 @@ function saveConfig() {
         discord_app_secret: document.getElementById('discord_app_secret').value,
         discord_app_id: document.getElementById('discord_app_id').value,
         auto_sync_threshold: parseInt(document.getElementById('auto_sync_threshold').value) || 90,
-        gemini_api_key: document.getElementById('gemini_api_key').value
+        gemini_api_key: document.getElementById('gemini_api_key').value,
+        scene_snapshots: document.getElementById('scene_snapshots').value === 'true'
     };
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.save_config(config).then(function(response) {
@@ -308,7 +310,7 @@ function stopHistoryRefresh() {
 }
 
 // ===== Load Config on Start =====
-window.addEventListener('pywebviewready', function() {
+function initPyWebview() {
     window.pywebview.api.get_config().then(function(config) {
         document.getElementById('client_id').value = config.client_id || '';
         document.getElementById('vlc_host').value = config.vlc_host || 'localhost';
@@ -320,6 +322,7 @@ window.addEventListener('pywebviewready', function() {
         document.getElementById('discord_app_id').value = config.discord_app_id || config.discord_client_id || '';
         document.getElementById('auto_sync_threshold').value = config.auto_sync_threshold || 90;
         document.getElementById('gemini_api_key').value = config.gemini_api_key || '';
+        document.getElementById('scene_snapshots').value = (config.scene_snapshots !== false) ? 'true' : 'false';
     });
     
     document.getElementById('btn-anilist-login').addEventListener('click', (e) => {
@@ -402,7 +405,14 @@ window.addEventListener('pywebviewready', function() {
     }, 1500);
 
     // Backend state now handles version.
-});
+}
+
+if (window.pywebview && window.pywebview.api) {
+    initPyWebview();
+} else {
+    window.addEventListener('pywebviewready', initPyWebview);
+}
+
 // ===== AniList Logs =====
 let aniLogInterval = null;
 let _lastAniLogCount = 0;
