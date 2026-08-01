@@ -6,7 +6,7 @@ import urllib.request
 import urllib.parse
 import json
 
-def get_or_create_release(repo, tag_name, token):
+def get_or_create_release(repo, tag_name, token, name=None, body=None):
     url = f"https://api.github.com/repos/{repo}/releases/tags/{tag_name}"
     headers = {
         "Authorization": f"token {token}",
@@ -22,8 +22,8 @@ def get_or_create_release(repo, tag_name, token):
             create_url = f"https://api.github.com/repos/{repo}/releases"
             data = {
                 "tag_name": tag_name,
-                "name": f"🚀 VLC RPC {tag_name}",
-                "body": f"## What's New in {tag_name}!\n\nThis release includes major updates to the notification and update system.",
+                "name": name or f"🚀 VLC RPC {tag_name}",
+                "body": body or f"## What's New in {tag_name}!\n\nThis release includes major updates to the notification and update system.",
                 "draft": False,
                 "prerelease": False
             }
