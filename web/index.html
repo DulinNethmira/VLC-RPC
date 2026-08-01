@@ -258,25 +258,35 @@
 
                     <div class="glass-card">
                         <h3><i class="fab fa-discord"></i> Discord Widget Sync</h3>
-                        <p class="hint" style="margin-bottom: 15px;">Sync your AniList total stats directly to your Custom Discord Profile Widget.</p>
+                        <p class="hint" style="margin-bottom: 15px;">Sync your AniList total stats directly to your Custom Discord Profile Widget (v2) and Linked Roles.</p>
                         
                         <div class="input-group">
-                            <label>Discord Client ID</label>
-                            <input type="text" id="discord_app_id" placeholder="Application ID...">
-                            <span class="hint">The Application ID for your widget app.</span>
+                            <label>Discord Application ID</label>
+                            <input type="text" id="discord_widget_app_id" placeholder="Application ID for Profile Widget v2...">
                         </div>
                         <div class="input-group" style="margin-top: 15px;">
-                            <label>Discord Client Secret</label>
+                            <label>Discord Bot Token</label>
+                            <input type="password" id="discord_widget_bot_token" placeholder="Bot Token for Profile Widget v2...">
+                        </div>
+                        <div class="input-group" style="margin-top: 15px;">
+                            <label>Discord User ID</label>
+                            <input type="text" id="discord_widget_user_id" placeholder="Your User ID for Profile Widget v2...">
+                        </div>
+                        <div class="input-group" style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;">
+                            <label>Discord Client ID (Legacy Linked Roles)</label>
+                            <input type="text" id="discord_app_id" placeholder="Application ID...">
+                        </div>
+                        <div class="input-group" style="margin-top: 15px;">
+                            <label>Discord Client Secret (Legacy Linked Roles)</label>
                             <input type="password" id="discord_app_secret" placeholder="Client Secret...">
-                            <span class="hint">Found in Discord Developer Portal -> OAuth2. (Required to get an auth token).</span>
                         </div>
                         
                         <div style="display: flex; gap: 10px; margin-top: 15px;">
                             <button class="action-btn primary" style="flex: 1; justify-content: center;" onclick="window.pywebview.api.auth_discord_widget()">
-                                <i class="fas fa-lock"></i> Link Discord
+                                <i class="fas fa-lock"></i> Link Roles
                             </button>
                             <button class="action-btn" style="flex: 1; justify-content: center; background: rgba(88, 101, 242, 0.2); border-color: #5865F2;" onclick="window.pywebview.api.sync_discord_widget()">
-                                <i class="fas fa-sync"></i> Force Sync
+                                <i class="fas fa-sync"></i> Force Sync Widgets
                             </button>
                         </div>
                     </div>

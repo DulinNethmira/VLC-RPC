@@ -27,7 +27,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.6.7"
+CURRENT_VERSION = "4.7.1"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -44,7 +44,10 @@ DEFAULT_CONFIG = {
     "small_image_paused_text": "Paused",
     "gemini_api_key": "",
     "discord_webhook_url": "",
-    "scene_snapshots": False
+    "scene_snapshots": False,
+    "discord_widget_bot_token": "",
+    "discord_widget_app_id": "",
+    "discord_widget_user_id": ""
 }
 
 def query_gemini_title(filename, api_key):
@@ -798,7 +801,77 @@ class RPCBackend:
         except Exception as e:
             pass
             self.send_webhook_log(f"❌ **Discord Widget Crashed:** `{e}`")
+
+    def force_sync_widget_v2(self):
+        token = self.config.get("anilist_token")
+        bot_token = self.config.get("discord_widget_bot_token")
+        app_id = self.config.get("discord_widget_app_id")
+        user_id = self.config.get("discord_widget_user_id")
+
+        if not token or not bot_token or not app_id or not user_id:
+            return
+
+        try:
+            self.log("Syncing Profile Widget v2 stats...")
+            # 1. Fetch AniList Stats
+            headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json', 'Accept': 'application/json'}
+            query = '{ Viewer { name statistics { anime { episodesWatched minutesWatched meanScore statuses { status count } } } } }'
+            r = requests.post('https://graphql.anilist.co', json={'query': query}, headers=headers, timeout=10)
+            if r.status_code != 200:
+                self.log(f"Widget v2 Failed: AniList HTTP {r.status_code}")
+                self.send_webhook_log(f"❌ **Widget v2 Failed:** AniList HTTP {r.status_code}")
+                return
             
+            body = r.json()
+            viewer = body.get('data', {}).get('Viewer', {})
+            anilist_name = viewer.get('name', 'User')
+            stats = viewer.get('statistics', {}).get('anime', {})
+            
+            completed = watching = planned = 0
+            for s in (stats.get('statuses') or []):
+                status = s.get('status', '')
+                count = s.get('count', 0)
+                if status == 'COMPLETED': completed = count
+                elif status == 'CURRENT': watching = count
+                elif status == 'PLANNING': planned = count
+                
+            episodes = stats.get('episodesWatched', 0) or 0
+            minutes = stats.get('minutesWatched', 0) or 0
+            mean = stats.get('meanScore') or 0
+
+            # 2. Push to Discord Profile Widget
+            payload = {
+                "username": anilist_name,
+                "data": {
+                    "dynamic": [
+                        {"type": 1, "name": "completed", "value": str(completed)},
+                        {"type": 1, "name": "watching", "value": str(watching)},
+                        {"type": 1, "name": "planned", "value": str(planned)},
+                        {"type": 1, "name": "episodes", "value": str(episodes)},
+                        {"type": 1, "name": "hours", "value": str(minutes // 60)},
+                        {"type": 1, "name": "mean_score", "value": str(mean)}
+                    ]
+                }
+            }
+
+            discord_headers = {
+                'Authorization': f'Bot {bot_token}',
+                'Content-Type': 'application/json',
+                'User-Agent': 'DiscordBot (https://github.com/discord/discord-api-docs, 1.0.0)'
+            }
+            url = f"https://discord.com/api/v9/applications/{app_id}/users/{user_id}/identities/0/profile"
+            
+            r2 = requests.patch(url, json=payload, headers=discord_headers, timeout=5)
+            if r2.status_code in (200, 204):
+                self.log(f"Successfully updated Profile Widget v2 (Episodes: {episodes})")
+                self.send_webhook_log(f"✅ **Widget v2 Updated!** (Episodes: {episodes})")
+            else:
+                self.log(f"Widget v2 Failed: HTTP {r2.status_code} — {r2.text[:150]}")
+                self.send_webhook_log(f"❌ **Widget v2 Failed:** HTTP {r2.status_code} — `{r2.text[:150]}`")
+        except Exception as e:
+            self.log(f"Widget v2 Crashed: {e}")
+            self.send_webhook_log(f"❌ **Widget v2 Crashed:** `{e}`")
+
     def check_auto_sync(self):
         if not self.config.get("anilist_token"):
             return
@@ -2189,7 +2262,8 @@ class WebApi:
         
     def sync_discord_widget(self):
         threading.Thread(target=self.backend.force_sync_widget, daemon=True).start()
-        return {"success": True}
+        threading.Thread(target=self.backend.force_sync_widget_v2, daemon=True).start()
+        return jsonify({"success": True})
             
     def force_update(self):
         """Force Sync button: clears stuck cover, resets metadata, and re-triggers RPC update."""
