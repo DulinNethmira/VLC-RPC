@@ -1,5 +1,10 @@
-import os
 import sys
+if len(sys.argv) > 1 and sys.argv[1] == "--notifier":
+    import notifier_worker
+    notifier_worker.main()
+    sys.exit(0)
+
+import os
 import time
 import json
 import threading
@@ -21,14 +26,52 @@ from pypresence import Presence, ActivityType
 import webview
 import pystray
 from PIL import Image
-from notifier import notifier
+from PIL import Image
 
+class NotifierClient:
+    def __init__(self):
+        self.proc = None
+        self._start()
+
+    def _start(self):
+        try:
+            import subprocess
+            cmd = [sys.executable, "--notifier"]
+            # CREATE_NO_WINDOW = 0x08000000 ensures no console window pops up
+            self.proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                creationflags=0x08000000
+            )
+        except Exception as e:
+            print(f"Failed to start notifier: {e}")
+            self.proc = None
+
+    def show_toast(self, title, msg, icon="info"):
+        if not self.proc or self.proc.poll() is not None:
+            self._start()
+        
+        if self.proc:
+            try:
+                import json
+                data = json.dumps({"title": title, "msg": msg, "icon": icon})
+                self.proc.stdin.write(data + "\n")
+                self.proc.stdin.flush()
+            except Exception as e:
+                print(f"Failed to send toast: {e}")
+
+_notifier_client = NotifierClient()
+def show_toast(title, msg, icon="info"):
+    _notifier_client.show_toast(title, msg, icon)
 CONFIG_FILE = "config.json"
 CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.8.0"
+CURRENT_VERSION = "4.8.6"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -256,13 +299,21 @@ def clean_title(title):
     # Un-camelcase words for messy filenames (e.g., "ReZero" -> "Re Zero")
     title = re.sub(r'([a-z])([A-Z])', r'\1 \2', title)
 
-    loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\-:&!,]+?)[\s\.\-_]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
+    loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\.\-:&!,]+?)[\s\._]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
     if loose_ep:
         ep_num = int(loose_ep.group(2))
         explicit_ep = re.search(r'\b(?:Episode|Ep|E)\s*\d{1,4}\s*$', title, re.I)
         if explicit_ep or not (1900 <= ep_num <= 2099):
-            cleaned = re.sub(r'[\s\.\-_]+', ' ', loose_ep.group(1)).strip()
-            return ' '.join(w.capitalize() for w in cleaned.split()), f"Episode {ep_num}"
+            # Only strip dots/underscores — preserve hyphens so compound words
+            # (Thousand-Year) and subtitle separators ( - The Calamity) survive.
+            cleaned = re.sub(r'[\._ ]+', ' ', loose_ep.group(1)).strip()
+            # Strip any trailing dashes/spaces left by the separator before the episode number
+            cleaned = re.sub(r'[\s\-]+$', '', cleaned).strip()
+            # Smart title-case: capitalise each word but keep letters after hyphens
+            def _title_word(w):
+                # Handle hyphenated words like 'thousand-year' → 'Thousand-Year'
+                return '-'.join(p.capitalize() for p in w.split('-'))
+            return ' '.join(_title_word(w) for w in cleaned.split()), f"Episode {ep_num}"
 
     if guessit:
         try:
@@ -974,16 +1025,16 @@ class RPCBackend:
                             password = self.config.get("vlc_password", "")
                             seek_url = f"http://{host}:{port}/requests/status.xml?command=seek&val={int(seg['end'])}s"
                             requests.get(seek_url, auth=HTTPBasicAuth("", password), timeout=3)
-                            notifier.toast(f"AniSkip — {label} Skipped", f"Jumped to {end_fmt}", icon_type="skip")
+                            show_toast("AniSkip", f"Auto-skipped {label}! Jumped to {end_fmt}", icon="skip")
                             self.log(f"[AniSkip] Auto-skipped {label} at {current_time:.0f}s → {seg['end']:.0f}s")
                         except Exception as e:
                             self.log(f"[AniSkip] Auto-skip failed: {e}")
                     else:
-                        notifier.toast(f"AniSkip — {label} Detected", f"Ends at {end_fmt}", icon_type="skip")
+                        show_toast(f"AniSkip — {label} Detected", f"Ends at {end_fmt}", icon="skip")
                         self.log(f"[AniSkip] {label} detected in '{title}' E{episode_num}")
 
     def show_score_popup(self, title, episode_num, media_id):
-        """Show a scoring popup when user finishes an anime. Respects user's AniList score format."""
+        """Show a scoring popup when user finishes an anime by routing it to the safe UI worker."""
         score_key = (title, episode_num)
         if score_key in self.scored_episodes:
             return
@@ -993,125 +1044,25 @@ class RPCBackend:
         self.scored_episodes.add(score_key)
         fmt = self.state_data.get("anilist_score_format", "POINT_100")
 
-        def _popup():
-            import tkinter as tk
-            root = tk.Tk()
-            root.title("Rate This Anime")
-            root.overrideredirect(True)
-            root.attributes("-topmost", True)
-            root.configure(bg="#1e1e1e")
-
-            screen_w = root.winfo_screenwidth()
-            screen_h = root.winfo_screenheight()
-            w, h = 320, 210
-            x = screen_w - w - 20
-            y = screen_h - h - 60
-            root.geometry(f"{w}x{h}+{x}+{y}")
-            root.attributes("-alpha", 0.0)
-
-            # Outer border
-            outer = tk.Frame(root, bg="#3a3a3a")
-            outer.pack(fill=tk.BOTH, expand=True)
-            inner = tk.Frame(outer, bg="#1e1e1e")
-            inner.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
-
-            tk.Label(inner, text="★  Rate This Anime", font=("Helvetica Neue", 12, "bold"),
-                     fg="#ffd60a", bg="#1e1e1e").pack(pady=(14, 2))
-            tk.Label(inner, text=f"{title}", font=("Helvetica Neue", 10),
-                     fg="#a0a0a0", bg="#1e1e1e", wraplength=290).pack()
-
-            # Build score widget based on format
-            score_var = tk.StringVar(value="")
-
-            if fmt == "POINT_5":
-                star_frame = tk.Frame(inner, bg="#1e1e1e")
-                star_frame.pack(pady=10)
-                star_btns = []
-                selected = [0]
-                def set_stars(n):
-                    selected[0] = n
-                    score_var.set(str(n))
-                    for i, b in enumerate(star_btns):
-                        b.config(fg="#ffd60a" if i < n else "#444444")
-                for i in range(1, 6):
-                    b = tk.Button(star_frame, text="★", font=("Helvetica Neue", 22),
-                                  bg="#1e1e1e", fg="#444444", bd=0, cursor="hand2",
-                                  activebackground="#1e1e1e", command=lambda n=i: set_stars(n))
-                    b.pack(side=tk.LEFT, padx=2)
-                    star_btns.append(b)
-
-            elif fmt == "POINT_3":
-                face_frame = tk.Frame(inner, bg="#1e1e1e")
-                face_frame.pack(pady=8)
-                for val, emoji, label in [(1, ":(", "Bad"), (2, ":|", "OK"), (3, ":)", "Great")]:
-                    tk.Button(face_frame, text=f"{emoji}\n{label}", font=("Helvetica Neue", 11),
-                              bg="#2a2a2a", fg="#ffffff", bd=0, cursor="hand2", width=5, height=2,
-                              command=lambda v=val: score_var.set(str(v))).pack(side=tk.LEFT, padx=4)
-            else:
-                # Numeric entry (POINT_100, POINT_10, POINT_10_DECIMAL)
-                if fmt == "POINT_100":
-                    hint = "0 – 100"
-                elif fmt == "POINT_10_DECIMAL":
-                    hint = "0.0 – 10.0"
-                else:
-                    hint = "0 – 10"
-
-                tk.Label(inner, text=f"Score ({hint})", font=("Helvetica Neue", 10),
-                         fg="#a0a0a0", bg="#1e1e1e").pack(pady=(8, 2))
-                entry = tk.Entry(inner, textvariable=score_var, font=("Helvetica Neue", 14),
-                                 bg="#2a2a2a", fg="#ffffff", insertbackground="white",
-                                 bd=0, justify="center", width=10)
-                entry.pack(ipady=4)
-
-            def _submit():
-                raw = score_var.get().strip()
-                if not raw:
-                    root.destroy()
-                    return
-                try:
-                    score_val = float(raw)
-                    token = self.config.get("anilist_token", "")
-                    if token and media_id:
-                        mutation = """
-                        mutation ($mediaId: Int, $score: Float) {
-                          SaveMediaListEntry(mediaId: $mediaId, score: $score) { id score }
-                        }"""
-                        r = requests.post(
-                            "https://graphql.anilist.co",
-                            json={"query": mutation, "variables": {"mediaId": media_id, "score": score_val}},
-                            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                            timeout=8
-                        )
-                        if r.status_code == 200:
-                            notifier.toast("AniList Score Saved!", f"{title} rated {raw}", icon_type="star")
-                            self.log(f"[AniList] Scored '{title}' → {raw}")
-                        else:
-                            self.log(f"[AniList] Score save failed: HTTP {r.status_code}")
-                except Exception as e:
-                    self.log(f"[AniList] Score popup error: {e}")
-                root.destroy()
-
-            btn_frame = tk.Frame(inner, bg="#1e1e1e")
-            btn_frame.pack(pady=(8, 12))
-            tk.Button(btn_frame, text="Save", font=("Helvetica Neue", 11, "bold"),
-                      bg="#32d74b", fg="#ffffff", bd=0, padx=16, pady=5, cursor="hand2",
-                      command=_submit).pack(side=tk.LEFT, padx=4)
-            tk.Button(btn_frame, text="Skip", font=("Helvetica Neue", 11),
-                      bg="#2a2a2a", fg="#a0a0a0", bd=0, padx=16, pady=5, cursor="hand2",
-                      command=root.destroy).pack(side=tk.LEFT, padx=4)
-
-            def fade_in():
-                a = root.attributes("-alpha")
-                if a < 0.95:
-                    root.attributes("-alpha", min(a + 0.07, 0.95))
-                    root.after(16, fade_in)
-            root.after(50, fade_in)
-            root.mainloop()
-
-        threading.Thread(target=_popup, daemon=True).start()
-
+        token = self.config.get("anilist_token", "")
+        
+        if _notifier_client.proc:
+            try:
+                import json
+                data = json.dumps({
+                    "type": "score_popup",
+                    "title": title,
+                    "media_id": media_id,
+                    "format": fmt,
+                    "token": token
+                })
+                _notifier_client.proc.stdin.write(data + "\n")
+                _notifier_client.proc.stdin.flush()
+            except Exception as e:
+                self.log(f"Failed to trigger score popup: {e}")
     def check_auto_sync(self):
-
+        from win10toast import ToastNotifier
+        toaster = ToastNotifier()
         if not self.config.get("anilist_token"):
             return
         if not self.state_data.get("vlc_connected"):
@@ -1153,7 +1104,7 @@ class RPCBackend:
             self.anilist_log(f"[Trigger] Threshold crossed for '{title}' E{episode_num} ({pct:.1f}%)")
             success, new_status = self.sync_anilist(title, episode_num)
             if success:
-                notifier.toast("AniList Synced!", f"{title} • Episode {episode_num}", icon_type="sync")
+                show_toast("AniList Synced!", f"{title} • Episode {episode_num}", icon="sync")
                 # Check if this was the final episode or marked COMPLETED → show score popup
                 metadata = self.state_data.get("metadata") or {}
                 total_eps = metadata.get("total_episodes") or 0
@@ -1629,7 +1580,18 @@ class RPCBackend:
                 self.state_data["metadata"] = metadata
                 self.state_data["local_image_path"] = metadata.get("image_url") if metadata else None
                 self.state_data["status_message"] = "Metadata loaded successfully."
-                self.log(f"[Metadata] Applied metadata for '{cleaned_title}'")
+                # ── Official title override ────────────────────────────────────
+                # Every metadata source (AniList, OMDb, TVMaze, Jikan) now returns
+                # an "official_title" field with the authoritative database name.
+                # We override the display title with it so regardless of how the
+                # user named their file, the UI always shows the correct title.
+                if metadata:
+                    official = metadata.get("official_title")
+                    if official and isinstance(official, str) and official.strip():
+                        self.state_data["cleaned_title"] = official.strip()
+                        self.log(f"[Metadata] Title resolved: '{cleaned_title}' → '{official.strip()}'")
+                self.log(f"[Metadata] Applied metadata for '{self.state_data.get('cleaned_title', cleaned_title)}'")
+
             else:
                 self.log(f"[Metadata] Discarded stale metadata (file changed)")
         except Exception as e:
@@ -1962,7 +1924,7 @@ class RPCBackend:
                     self.state_data["rpc_connected"] = True
                     self.state_data["status_message"] = "Connected to Discord."
                     self.log(f"Connected to Discord RPC (Client ID: {desired_client_id})")
-                    notifier.toast("VLC RPC", "Connected to Discord!", icon_type="success")
+                    show_toast("VLC RPC", "Connected to Discord!", icon="success")
                     rpc_backoff = 1       # reset on successful connect
                     rpc_reconnect_at = 0.0
                 except Exception:
@@ -2269,6 +2231,7 @@ class RPCBackend:
                     "genres": data.get("genres", []),
                     "description": f"TV Show | {data.get('type', '')}",
                     "page_url": data.get("url"),
+                    "official_title": data.get("name"),
                     "total_episodes": len(episodes) if (embed and data.get("_embedded", {}).get("episodes")) else 0
                 }
         except Exception:
@@ -2294,6 +2257,7 @@ class RPCBackend:
                         "genres": [g.get("name") for g in anime.get("genres", []) if g.get("name")],
                         "description": f"Anime | {anime.get('type', '')}",
                         "page_url": anime.get("url"),
+                        "official_title": anime.get("title_english") or anime.get("title"),
                         "total_episodes": anime.get("episodes", 0)
                     }
             # Retry with first 3 words of title (helps with long titles like "Re:ZERO - Starting...")
@@ -2315,6 +2279,7 @@ class RPCBackend:
                                 "genres": [g.get("name") for g in anime.get("genres", []) if g.get("name")],
                                 "description": f"Anime | {anime.get('type', '')}",
                                 "page_url": anime.get("url"),
+                                "official_title": anime.get("title_english") or anime.get("title"),
                                 "total_episodes": anime.get("episodes", 0)
                             }
         except Exception:
@@ -2345,6 +2310,8 @@ class RPCBackend:
                     img = media.get("coverImage", {})
                     img_url = img.get("extraLarge") or img.get("large")
                     score = media.get("averageScore")
+                    t = media.get("title", {})
+                    official = t.get("english") or t.get("romaji")
                     return {
                         "image_url": img_url,
                         "rating": round(score / 10, 1) if score else None,
@@ -2352,6 +2319,7 @@ class RPCBackend:
                         "description": f"Anime | {', '.join(media.get('genres', [])[:2])}",
                         "page_url": media.get("siteUrl"),
                         "anilistId": media.get("id"),
+                        "official_title": official,
                         "total_episodes": media.get("episodes", 0)
                     }
         except Exception:
@@ -2393,7 +2361,8 @@ class RPCBackend:
                         "genres": genres,
                         "description": description,
                         "page_url": page_url,
-                        "plot": plot
+                        "plot": plot,
+                        "official_title": data.get("Title")
                     }
         except Exception:
             pass
@@ -2592,6 +2561,7 @@ class WebApi:
                     self.backend.state_data["update_version"] = latest_tag
                     self.backend.state_data["update_download_url"] = download_url
                     self.backend.state_data["update_changelog"] = changelog
+                    show_toast("Update Available", f"v{latest_tag} is available! Click Update in the app.")
                     return {
                         "update_available": True,
                         "current_version": CURRENT_VERSION,
