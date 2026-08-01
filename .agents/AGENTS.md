@@ -5,3 +5,7 @@ After bumping a version and pushing the release updates to GitHub, ALWAYS remind
 
 # GitHub API Requests
 When making API requests to GitHub to create releases with emojis, NEVER use PowerShell `Invoke-RestMethod` as it causes UTF-8 encoding corruption (turns emojis into '?'). ALWAYS use a Python script with `json.dumps().encode('utf-8')`.
+
+# GitHub Release Styling
+When releasing a new version, make sure the title and the release notes are stylish. Using Emojis and everything.
+Eg Title : ?? v4.3.1 - Critical Bug Fixes
