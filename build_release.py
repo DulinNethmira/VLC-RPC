@@ -57,10 +57,32 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v4.8.6"
+    tag_name = "v4.9.0"
     
+    release_title = "✨ v4.9.0 - Massive Feature Update: Flawless Covers & New Look!"
+    release_notes = """### 🚀 What's New in v4.9.0!
+We've added highly requested features to make your anime tracking experience even better.
+
+#### 🎨 Fresh New Look
+- **Brand New Logo**: A gorgeous, modern new logo for VLC RPC.
+- **UI Polish**: Everywhere you look, it's sleeker and faster.
+
+#### 🖼️ Flawless Cover Art
+- **Zero-CORS Cover Engine**: Rewrote the cover image fetching engine. The web dashboard will now flawlessly display high-quality cover art for *every single anime* by securely bypassing strict browser Content Security Policies (CSP) using base64 data URIs!
+- **Reliable Fallbacks**: If you're offline, it smartly falls back to VLC's embedded art.
+
+#### 🍎 UI Enhancements
+- **macOS-Style Toasts**: Continued polish on our sleek, animated dark-mode toast notifications!
+
+### 🔧 Fixes & Tweaks
+- Fixed an annoying bug where Discord would show the cover image but the desktop app wouldn't.
+- System Tray integration improvements.
+
+Enjoy the new update! 🎉
+"""
+
     try:
-        release = get_or_create_release(repo, tag_name, token)
+        release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)
         
         # Inno Setup output is usually VLC RPC Setup.exe in dist folder
         file_path = r"dist\VLC RPC Setup.exe"
