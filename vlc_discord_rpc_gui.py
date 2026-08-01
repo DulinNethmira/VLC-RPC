@@ -71,7 +71,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.8.6"
+CURRENT_VERSION = "4.9.0"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1347,8 +1347,30 @@ class RPCBackend:
             return None
         metadata = dict(metadata)
         image_url = self.normalize_cover_url(metadata.get("image_url"))
-        metadata["image_url"] = image_url
+        metadata["image_url"] = image_url  # kept as raw HTTPS URL for Discord RPC
+
+        # Also produce a base64 data URI so the pywebview frontend can display
+        # the image without being blocked by the file:// → https:// CORS restriction.
+        if image_url and not image_url.startswith("data:image/"):
+            try:
+                import base64
+                headers = {
+                    "User-Agent": f"VLC-RPC/{CURRENT_VERSION}",
+                    "Accept": "image/*,*/*;q=0.8",
+                }
+                r = requests.get(image_url, headers=headers, timeout=6, allow_redirects=True)
+                if 200 <= r.status_code < 300:
+                    mime = (r.headers.get("Content-Type") or "image/jpeg").split(";")[0].lower()
+                    if not mime.startswith("image/"):
+                        mime = "image/jpeg"
+                    metadata["image_data_uri"] = f"data:{mime};base64," + base64.b64encode(r.content).decode()
+            except Exception:
+                pass  # Frontend will fall back to the raw URL or local VLC art
+        elif image_url and image_url.startswith("data:image/"):
+            metadata["image_data_uri"] = image_url  # already a data URI
+
         return metadata
+
 
     def fetch_anilist_username(self):
         """Fetch the AniList username for the connected account. Cached after first success.
