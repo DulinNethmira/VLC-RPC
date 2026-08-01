@@ -21,13 +21,14 @@ from pypresence import Presence, ActivityType
 import webview
 import pystray
 from PIL import Image
+from notifier import notifier
 
 CONFIG_FILE = "config.json"
 CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.7.2"
+CURRENT_VERSION = "4.8.0"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -47,7 +48,9 @@ DEFAULT_CONFIG = {
     "scene_snapshots": False,
     "discord_widget_bot_token": "",
     "discord_widget_app_id": "",
-    "discord_widget_user_id": ""
+    "discord_widget_user_id": "",
+    "aniskip_auto_skip": False,
+    "auto_score_popup": True
 }
 
 def query_gemini_title(filename, api_key):
@@ -424,7 +427,8 @@ class RPCBackend:
             "update_version": "",
             "update_download_url": "",
             "update_changelog": "",
-            "scene_snapshot_url": ""
+            "scene_snapshot_url": "",
+            "anilist_score_format": "POINT_100"
         }
         self.force_update_flag = False
         self.scrobbled_episodes = set()
@@ -437,6 +441,9 @@ class RPCBackend:
         self.anilist_logs = []
         self.history = self.load_history()
         self.setup_database()
+        self.aniskip_cache = {}  # cache: (anilist_id, episode) -> {op_start, op_end, ed_start, ed_end}
+        self.aniskip_notified = set()  # tracks already-notified (title, ep, section)
+        self.scored_episodes = set()  # tracks already-scored (title, ep)
         self.metadata_cache = self.load_metadata_cache()
         
         # Load gemini cache
@@ -457,7 +464,7 @@ class RPCBackend:
         self.worker_thread = threading.Thread(target=self.rpc_worker, daemon=True)
         self.worker_thread.start()
 
-    def log(self, msg):
+    def log(self, msg, toast_title=None, toast_icon="info"):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         formatted = f"[{timestamp}] {msg}"
         if self.window:
@@ -465,6 +472,8 @@ class RPCBackend:
                 self.window.evaluate_js(f"if(window.addLog) window.addLog({json.dumps(formatted)});")
             except Exception:
                 pass
+        if toast_title:
+            notifier.toast(toast_title, msg, icon_type=toast_icon)
 
     def load_history(self):
         if getattr(sys, 'frozen', False):
@@ -725,19 +734,19 @@ class RPCBackend:
             if entry.get("id"):
                 emoji = "[OK]" if new_status == "CURRENT" else "[DONE]"
                 self.anilist_log(f"{emoji} Updated! '{title}' E{entry['progress']} -> {entry['status']}")
-                return True
+                return True, new_status
             else:
                 errors = result.get("errors", [])
                 err = errors[0].get("message", "Unknown") if errors else str(result)[:120]
                 self.anilist_log(f"[Error] Mutation failed: {err}")
-                return False
+                return False, new_status
 
         except PermissionError:
-            return False
+            return False, "CURRENT"
         except Exception as e:
             pass
             self.anilist_log(f"[Crash] sync_anilist error: {e}")
-            return False
+            return False, "CURRENT"
 
     def force_sync_widget(self):
         token = self.config.get("anilist_token")
@@ -872,7 +881,237 @@ class RPCBackend:
             self.log(f"Widget v2 Crashed: {e}")
             self.send_webhook_log(f"❌ **Widget v2 Crashed:** `{e}`")
 
+    def fetch_anilist_score_format(self):
+        """Fetch the user's scoring system from AniList and cache it in state_data."""
+        token = self.config.get("anilist_token", "").strip()
+        if not token:
+            return
+        try:
+            r = requests.post(
+                "https://graphql.anilist.co",
+                json={"query": "query { Viewer { mediaListOptions { scoreFormat } } }"},
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                timeout=8
+            )
+            if r.status_code == 200:
+                fmt = (r.json().get("data") or {}).get("Viewer", {}).get("mediaListOptions", {}).get("scoreFormat", "POINT_100")
+                if fmt:
+                    self.state_data["anilist_score_format"] = fmt
+                    self.log(f"[AniList] Score format: {fmt}")
+        except Exception:
+            pass
+
+    def fetch_aniskip_timestamps(self, anilist_id, episode_num):
+        """Fetch OP/ED timestamps from AniSkip API. Cached by (anilist_id, episode)."""
+        cache_key = (anilist_id, episode_num)
+        if cache_key in self.aniskip_cache:
+            return self.aniskip_cache[cache_key]
+        try:
+            url = f"https://api.aniskip.com/v1/skip-times/{anilist_id}/{episode_num}?types=op&types=ed"
+            r = requests.get(url, timeout=6)
+            if r.status_code == 200:
+                data = r.json()
+                result = {"op": None, "ed": None}
+                for item in data.get("results", []):
+                    skip_type = item.get("skip_type")
+                    interval = item.get("interval", {})
+                    start = interval.get("start_time")
+                    end = interval.get("end_time")
+                    if start is not None and end is not None:
+                        result[skip_type] = {"start": start, "end": end}
+                self.aniskip_cache[cache_key] = result
+                return result
+            else:
+                self.aniskip_cache[cache_key] = {"op": None, "ed": None}
+        except Exception:
+            self.aniskip_cache[cache_key] = {"op": None, "ed": None}
+        return self.aniskip_cache.get(cache_key, {"op": None, "ed": None})
+
+    def check_aniskip(self):
+        """Check current playback position against AniSkip timestamps. Notify or auto-skip."""
+        if not self.config.get("anilist_token"):
+            return
+        if self.state_data.get("playback_state") != "playing":
+            return
+        if self.state_data.get("is_music"):
+            return
+
+        metadata = self.state_data.get("metadata") or {}
+        anilist_id = metadata.get("anilistId")
+        if not anilist_id:
+            return
+
+        ep_str = self.state_data.get("episode_str", "")
+        ep_match = re.search(r'Episode\s*(\d+)', ep_str, re.IGNORECASE)
+        if not ep_match:
+            return
+        episode_num = int(ep_match.group(1))
+        title = self.state_data.get("cleaned_title", "")
+        current_time = self.state_data.get("time", 0)
+
+        timestamps = self.fetch_aniskip_timestamps(anilist_id, episode_num)
+
+        def _in_range(section):
+            seg = timestamps.get(section)
+            if not seg:
+                return False
+            return seg["start"] <= current_time <= seg["end"]
+
+        for section, label in [("op", "Opening"), ("ed", "Ending")]:
+            seg = timestamps.get(section)
+            if not seg:
+                continue
+            notify_key = (title, episode_num, section)
+            if _in_range(section):
+                if notify_key not in self.aniskip_notified:
+                    self.aniskip_notified.add(notify_key)
+                    end_fmt = time.strftime("%M:%S", time.gmtime(seg["end"]))
+                    if self.config.get("aniskip_auto_skip"):
+                        # Auto-skip: seek to end of section via VLC HTTP API
+                        try:
+                            host = self.config.get("vlc_host", "localhost")
+                            port = self.config.get("vlc_port", 8080)
+                            password = self.config.get("vlc_password", "")
+                            seek_url = f"http://{host}:{port}/requests/status.xml?command=seek&val={int(seg['end'])}s"
+                            requests.get(seek_url, auth=HTTPBasicAuth("", password), timeout=3)
+                            notifier.toast(f"AniSkip — {label} Skipped", f"Jumped to {end_fmt}", icon_type="skip")
+                            self.log(f"[AniSkip] Auto-skipped {label} at {current_time:.0f}s → {seg['end']:.0f}s")
+                        except Exception as e:
+                            self.log(f"[AniSkip] Auto-skip failed: {e}")
+                    else:
+                        notifier.toast(f"AniSkip — {label} Detected", f"Ends at {end_fmt}", icon_type="skip")
+                        self.log(f"[AniSkip] {label} detected in '{title}' E{episode_num}")
+
+    def show_score_popup(self, title, episode_num, media_id):
+        """Show a scoring popup when user finishes an anime. Respects user's AniList score format."""
+        score_key = (title, episode_num)
+        if score_key in self.scored_episodes:
+            return
+        if not self.config.get("auto_score_popup", True):
+            return
+
+        self.scored_episodes.add(score_key)
+        fmt = self.state_data.get("anilist_score_format", "POINT_100")
+
+        def _popup():
+            import tkinter as tk
+            root = tk.Tk()
+            root.title("Rate This Anime")
+            root.overrideredirect(True)
+            root.attributes("-topmost", True)
+            root.configure(bg="#1e1e1e")
+
+            screen_w = root.winfo_screenwidth()
+            screen_h = root.winfo_screenheight()
+            w, h = 320, 210
+            x = screen_w - w - 20
+            y = screen_h - h - 60
+            root.geometry(f"{w}x{h}+{x}+{y}")
+            root.attributes("-alpha", 0.0)
+
+            # Outer border
+            outer = tk.Frame(root, bg="#3a3a3a")
+            outer.pack(fill=tk.BOTH, expand=True)
+            inner = tk.Frame(outer, bg="#1e1e1e")
+            inner.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+
+            tk.Label(inner, text="★  Rate This Anime", font=("Helvetica Neue", 12, "bold"),
+                     fg="#ffd60a", bg="#1e1e1e").pack(pady=(14, 2))
+            tk.Label(inner, text=f"{title}", font=("Helvetica Neue", 10),
+                     fg="#a0a0a0", bg="#1e1e1e", wraplength=290).pack()
+
+            # Build score widget based on format
+            score_var = tk.StringVar(value="")
+
+            if fmt == "POINT_5":
+                star_frame = tk.Frame(inner, bg="#1e1e1e")
+                star_frame.pack(pady=10)
+                star_btns = []
+                selected = [0]
+                def set_stars(n):
+                    selected[0] = n
+                    score_var.set(str(n))
+                    for i, b in enumerate(star_btns):
+                        b.config(fg="#ffd60a" if i < n else "#444444")
+                for i in range(1, 6):
+                    b = tk.Button(star_frame, text="★", font=("Helvetica Neue", 22),
+                                  bg="#1e1e1e", fg="#444444", bd=0, cursor="hand2",
+                                  activebackground="#1e1e1e", command=lambda n=i: set_stars(n))
+                    b.pack(side=tk.LEFT, padx=2)
+                    star_btns.append(b)
+
+            elif fmt == "POINT_3":
+                face_frame = tk.Frame(inner, bg="#1e1e1e")
+                face_frame.pack(pady=8)
+                for val, emoji, label in [(1, ":(", "Bad"), (2, ":|", "OK"), (3, ":)", "Great")]:
+                    tk.Button(face_frame, text=f"{emoji}\n{label}", font=("Helvetica Neue", 11),
+                              bg="#2a2a2a", fg="#ffffff", bd=0, cursor="hand2", width=5, height=2,
+                              command=lambda v=val: score_var.set(str(v))).pack(side=tk.LEFT, padx=4)
+            else:
+                # Numeric entry (POINT_100, POINT_10, POINT_10_DECIMAL)
+                if fmt == "POINT_100":
+                    hint = "0 – 100"
+                elif fmt == "POINT_10_DECIMAL":
+                    hint = "0.0 – 10.0"
+                else:
+                    hint = "0 – 10"
+
+                tk.Label(inner, text=f"Score ({hint})", font=("Helvetica Neue", 10),
+                         fg="#a0a0a0", bg="#1e1e1e").pack(pady=(8, 2))
+                entry = tk.Entry(inner, textvariable=score_var, font=("Helvetica Neue", 14),
+                                 bg="#2a2a2a", fg="#ffffff", insertbackground="white",
+                                 bd=0, justify="center", width=10)
+                entry.pack(ipady=4)
+
+            def _submit():
+                raw = score_var.get().strip()
+                if not raw:
+                    root.destroy()
+                    return
+                try:
+                    score_val = float(raw)
+                    token = self.config.get("anilist_token", "")
+                    if token and media_id:
+                        mutation = """
+                        mutation ($mediaId: Int, $score: Float) {
+                          SaveMediaListEntry(mediaId: $mediaId, score: $score) { id score }
+                        }"""
+                        r = requests.post(
+                            "https://graphql.anilist.co",
+                            json={"query": mutation, "variables": {"mediaId": media_id, "score": score_val}},
+                            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                            timeout=8
+                        )
+                        if r.status_code == 200:
+                            notifier.toast("AniList Score Saved!", f"{title} rated {raw}", icon_type="star")
+                            self.log(f"[AniList] Scored '{title}' → {raw}")
+                        else:
+                            self.log(f"[AniList] Score save failed: HTTP {r.status_code}")
+                except Exception as e:
+                    self.log(f"[AniList] Score popup error: {e}")
+                root.destroy()
+
+            btn_frame = tk.Frame(inner, bg="#1e1e1e")
+            btn_frame.pack(pady=(8, 12))
+            tk.Button(btn_frame, text="Save", font=("Helvetica Neue", 11, "bold"),
+                      bg="#32d74b", fg="#ffffff", bd=0, padx=16, pady=5, cursor="hand2",
+                      command=_submit).pack(side=tk.LEFT, padx=4)
+            tk.Button(btn_frame, text="Skip", font=("Helvetica Neue", 11),
+                      bg="#2a2a2a", fg="#a0a0a0", bd=0, padx=16, pady=5, cursor="hand2",
+                      command=root.destroy).pack(side=tk.LEFT, padx=4)
+
+            def fade_in():
+                a = root.attributes("-alpha")
+                if a < 0.95:
+                    root.attributes("-alpha", min(a + 0.07, 0.95))
+                    root.after(16, fade_in)
+            root.after(50, fade_in)
+            root.mainloop()
+
+        threading.Thread(target=_popup, daemon=True).start()
+
     def check_auto_sync(self):
+
         if not self.config.get("anilist_token"):
             return
         if not self.state_data.get("vlc_connected"):
@@ -912,8 +1151,16 @@ class RPCBackend:
         if pct >= threshold:
             self.scrobbled_episodes.add(cache_key)
             self.anilist_log(f"[Trigger] Threshold crossed for '{title}' E{episode_num} ({pct:.1f}%)")
-            success = self.sync_anilist(title, episode_num)
-            if not success:
+            success, new_status = self.sync_anilist(title, episode_num)
+            if success:
+                notifier.toast("AniList Synced!", f"{title} • Episode {episode_num}", icon_type="sync")
+                # Check if this was the final episode or marked COMPLETED → show score popup
+                metadata = self.state_data.get("metadata") or {}
+                total_eps = metadata.get("total_episodes") or 0
+                media_id = metadata.get("anilistId")
+                if (new_status == "COMPLETED" or (total_eps and episode_num >= total_eps)) and media_id:
+                    threading.Thread(target=self.show_score_popup, args=(title, episode_num, media_id), daemon=True).start()
+            else:
                 self.scrobbled_episodes.discard(cache_key)
 
 
@@ -1398,6 +1645,9 @@ class RPCBackend:
         rpc_backoff = 1          # seconds to wait before next reconnect attempt
         rpc_reconnect_at = 0.0   # earliest epoch time allowed for a reconnect
         
+        # Fetch the user's AniList score format once at startup
+        threading.Thread(target=self.fetch_anilist_score_format, daemon=True).start()
+
         while not self.state_data["exit_flag"]:
             try:
                 auth = HTTPBasicAuth('', self.config.get("vlc_password", ""))
@@ -1600,6 +1850,7 @@ class RPCBackend:
                         self.force_update_flag = False
 
                     self.check_auto_sync()
+                    self.check_aniskip()
 
                     if track_key != last_track_key and not gemini_pending:
                         if hasattr(self, 'last_watched_title_raw') and self.last_watched_title_raw != self.state_data['title']:
@@ -1711,6 +1962,7 @@ class RPCBackend:
                     self.state_data["rpc_connected"] = True
                     self.state_data["status_message"] = "Connected to Discord."
                     self.log(f"Connected to Discord RPC (Client ID: {desired_client_id})")
+                    notifier.toast("VLC RPC", "Connected to Discord!", icon_type="success")
                     rpc_backoff = 1       # reset on successful connect
                     rpc_reconnect_at = 0.0
                 except Exception:

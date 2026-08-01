@@ -207,7 +207,9 @@ function saveConfig() {
         discord_widget_user_id: document.getElementById('discord_widget_user_id').value,
         auto_sync_threshold: parseInt(document.getElementById('auto_sync_threshold').value) || 90,
         gemini_api_key: document.getElementById('gemini_api_key').value,
-        scene_snapshots: document.getElementById('scene_snapshots').value === 'true'
+        scene_snapshots: document.getElementById('scene_snapshots').value === 'true',
+        aniskip_auto_skip: document.getElementById('aniskip_auto_skip').checked,
+        auto_score_popup: document.getElementById('auto_score_popup').checked
     };
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.save_config(config).then(function(response) {
@@ -248,6 +250,9 @@ function switchTab(tabId) {
         startAniLogRefresh();
     } else {
         stopAniLogRefresh();
+    }
+    if (tabId.includes('analytics')) {
+        loadAnalytics();
     }
 }
 
@@ -329,6 +334,8 @@ function initPyWebview() {
         document.getElementById('auto_sync_threshold').value = config.auto_sync_threshold || 90;
         document.getElementById('gemini_api_key').value = config.gemini_api_key || '';
         document.getElementById('scene_snapshots').value = (config.scene_snapshots !== false) ? 'true' : 'false';
+        document.getElementById('aniskip_auto_skip').checked = !!config.aniskip_auto_skip;
+        document.getElementById('auto_score_popup').checked = (config.auto_score_popup !== false);
     });
     
     document.getElementById('btn-anilist-login').addEventListener('click', (e) => {
@@ -661,3 +668,90 @@ function checkUpdates() {
     });
 }
 
+let _anaWeeklyChart = null;
+
+function loadAnalytics() {
+    if (!window.pywebview || !window.pywebview.api) return;
+    window.pywebview.api.get_stats().then(stats => {
+        if (!stats) return;
+
+        // ── Summary Cards ──────────────────────────────────────────────
+        const totalSec = stats.total_watch_time || 0;
+        document.getElementById('ana-total-hours').textContent = (totalSec / 3600).toFixed(1);
+
+        const titles = new Set((stats.history || []).map(h => h.title));
+        document.getElementById('ana-total-titles').textContent = titles.size;
+
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const todaySec = (stats.history || []).filter(h => h.timestamp && h.timestamp.startsWith(todayStr))
+            .reduce((acc, h) => acc + (h.duration || 0), 0);
+        document.getElementById('ana-today-hours').textContent = (todaySec / 3600).toFixed(1);
+
+        // ── 7-Day Chart ──────────────────────────────────────────────────
+        const labels = [];
+        const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            labels.push(dayNames[d.getDay()]);
+        }
+        const weekData = (stats.recent_activity || Array(7).fill(0)).slice(-7);
+
+        const ctx = document.getElementById('ana-weekly-chart').getContext('2d');
+        if (_anaWeeklyChart) _anaWeeklyChart.destroy();
+        _anaWeeklyChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Hours',
+                    data: weekData,
+                    backgroundColor: 'rgba(167, 139, 250, 0.7)',
+                    borderColor: '#a78bfa',
+                    borderWidth: 2,
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                    y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
+                },
+                animation: { duration: 600, easing: 'easeOutQuart' }
+            }
+        });
+
+        // ── Top Titles ──────────────────────────────────────────────────
+        const topMap = {};
+        (stats.history || []).forEach(h => {
+            if (!h.title) return;
+            topMap[h.title] = (topMap[h.title] || 0) + (h.duration || 0);
+        });
+        const topList = Object.entries(topMap).sort((a, b) => b[1] - a[1]).slice(0, 7);
+        const maxDur = topList.length ? topList[0][1] : 1;
+        const listEl = document.getElementById('ana-top-list');
+        listEl.innerHTML = '';
+        if (topList.length === 0) {
+            listEl.innerHTML = '<p style="color:#555;font-size:12px;text-align:center;margin-top:20px;">No data yet. Start watching!</p>';
+            return;
+        }
+        const colors = ['#a78bfa','#38bdf8','#34d399','#f97316','#fbbf24','#f472b6','#60a5fa'];
+        topList.forEach(([title, dur], i) => {
+            const hrs = (dur / 3600).toFixed(1);
+            const pct = Math.round((dur / maxDur) * 100);
+            const color = colors[i % colors.length];
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;flex-direction:column;gap:3px;';
+            row.innerHTML = `
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-size:12px;color:#e2e8f0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px;" title="${title}">${title}</span>
+                    <span style="font-size:11px;color:#94a3b8;flex-shrink:0;margin-left:8px;">${hrs}h</span>
+                </div>
+                <div style="background:rgba(255,255,255,0.07);border-radius:4px;height:5px;">
+                    <div style="background:${color};width:${pct}%;height:5px;border-radius:4px;transition:width 0.5s ease;"></div>
+                </div>`;
+            listEl.appendChild(row);
+        });
+    }).catch(err => console.error('Analytics error:', err));
+}

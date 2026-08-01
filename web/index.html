@@ -43,6 +43,9 @@
                 <a href="#" class="nav-item" data-tab="tab-anilogs">
                     <i class="fas fa-scroll"></i> AniList Logs
                 </a>
+                <a href="#" class="nav-item" data-tab="tab-analytics">
+                    <i class="fas fa-chart-bar"></i> Analytics
+                </a>
             </div>
             
             <div class="sidebar-footer">
@@ -254,6 +257,20 @@
                             <input type="number" id="auto_sync_threshold" value="90" min="50" max="100">
                             <span class="hint">Percentage of the video that must be watched before syncing.</span>
                         </div>
+                        <div class="input-group" style="margin-top: 15px;">
+                            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                                <input type="checkbox" id="aniskip_auto_skip" style="width:16px;height:16px;accent-color:#7c3aed;cursor:pointer;">
+                                <span>AniSkip — Auto-Skip Openings &amp; Endings</span>
+                            </label>
+                            <span class="hint">Automatically jumps over OP/ED when detected. Requires AniList to be connected.</span>
+                        </div>
+                        <div class="input-group" style="margin-top: 12px;">
+                            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                                <input type="checkbox" id="auto_score_popup" style="width:16px;height:16px;accent-color:#7c3aed;cursor:pointer;" checked>
+                                <span>Auto-Score Popup on Series Completion</span>
+                            </label>
+                            <span class="hint">Shows a rating popup when you finish the final episode of a series.</span>
+                        </div>
                     </div>
 
                     <div class="glass-card">
@@ -289,6 +306,40 @@
                                 <i class="fas fa-sync"></i> Force Sync Widgets
                             </button>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analytics Tab -->
+            <div id="tab-analytics" class="tab-content" style="display: none;">
+                <header class="page-header">
+                    <h1><i class="fas fa-chart-bar" style="margin-right:8px;"></i>Your Anime Wrap</h1>
+                    <button class="action-btn" onclick="loadAnalytics()"><i class="fas fa-sync"></i> Refresh</button>
+                </header>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;" id="analytics-stats-row">
+                    <div class="glass-card" style="text-align:center;padding:18px 12px;">
+                        <div style="font-size:28px;font-weight:700;color:#a78bfa;" id="ana-total-hours">--</div>
+                        <div style="color:#94a3b8;font-size:12px;margin-top:4px;">Total Hours Watched</div>
+                    </div>
+                    <div class="glass-card" style="text-align:center;padding:18px 12px;">
+                        <div style="font-size:28px;font-weight:700;color:#38bdf8;" id="ana-total-titles">--</div>
+                        <div style="color:#94a3b8;font-size:12px;margin-top:4px;">Unique Titles</div>
+                    </div>
+                    <div class="glass-card" style="text-align:center;padding:18px 12px;">
+                        <div style="font-size:28px;font-weight:700;color:#34d399;" id="ana-today-hours">--</div>
+                        <div style="color:#94a3b8;font-size:12px;margin-top:4px;">Hours Today</div>
+                    </div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                    <div class="glass-card">
+                        <h3 style="margin-bottom:16px;"><i class="fas fa-fire" style="color:#f97316;margin-right:8px;"></i>7-Day Activity</h3>
+                        <canvas id="ana-weekly-chart" height="140"></canvas>
+                    </div>
+                    <div class="glass-card">
+                        <h3 style="margin-bottom:16px;"><i class="fas fa-trophy" style="color:#fbbf24;margin-right:8px;"></i>Most Watched</h3>
+                        <div id="ana-top-list" style="display:flex;flex-direction:column;gap:8px;"></div>
                     </div>
                 </div>
             </div>
