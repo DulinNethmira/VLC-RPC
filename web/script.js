@@ -202,6 +202,9 @@ function saveConfig() {
         anilist_client_secret: document.getElementById('anilist_client_secret').value,
         discord_app_secret: document.getElementById('discord_app_secret').value,
         discord_app_id: document.getElementById('discord_app_id').value,
+        discord_widget_bot_token: document.getElementById('discord_widget_bot_token').value,
+        discord_widget_app_id: document.getElementById('discord_widget_app_id').value,
+        discord_widget_user_id: document.getElementById('discord_widget_user_id').value,
         auto_sync_threshold: parseInt(document.getElementById('auto_sync_threshold').value) || 90,
         gemini_api_key: document.getElementById('gemini_api_key').value,
         scene_snapshots: document.getElementById('scene_snapshots').value === 'true'
@@ -320,6 +323,9 @@ function initPyWebview() {
         document.getElementById('anilist_client_secret').value = config.anilist_client_secret || '';
         document.getElementById('discord_app_secret').value = config.discord_client_secret || config.discord_app_secret || '';
         document.getElementById('discord_app_id').value = config.discord_app_id || config.discord_client_id || '';
+        document.getElementById('discord_widget_bot_token').value = config.discord_widget_bot_token || '';
+        document.getElementById('discord_widget_app_id').value = config.discord_widget_app_id || '';
+        document.getElementById('discord_widget_user_id').value = config.discord_widget_user_id || '';
         document.getElementById('auto_sync_threshold').value = config.auto_sync_threshold || 90;
         document.getElementById('gemini_api_key').value = config.gemini_api_key || '';
         document.getElementById('scene_snapshots').value = (config.scene_snapshots !== false) ? 'true' : 'false';
