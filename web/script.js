@@ -48,7 +48,7 @@ window.updateState = function(state) {
 
         // Cover image - snapshot first, then episode-specific online cover, fallback to VLC embedded art
         const coverEl = document.getElementById('hero-cover');
-        const snapshotUrl = state.scene_snapshot_url || '';
+        const snapshotUrl = state.scene_snapshot_data_uri || state.scene_snapshot_url || '';
         const onlineImgUrl = (state.metadata && (state.metadata.image_data_uri || state.metadata.image_url)) || '';
         const localImgUrl = state.local_arturl || '';
         const imgUrl = snapshotUrl || onlineImgUrl || localImgUrl || '';

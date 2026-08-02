@@ -57,28 +57,18 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v4.9.0"
+    tag_name = "v4.9.1"
     
-    release_title = "✨ v4.9.0 - Massive Feature Update: Flawless Covers & New Look!"
-    release_notes = """### 🚀 What's New in v4.9.0!
-We've added highly requested features to make your anime tracking experience even better.
+    release_title = "🩹 v4.9.1 - Hotfix: Perfect Title Recognition & Snapshot Covers"
+    release_notes = """### 🚀 What's Fixed in v4.9.1!
 
-#### 🎨 Fresh New Look
-- **Brand New Logo**: A gorgeous, modern new logo for VLC RPC.
-- **UI Polish**: Everywhere you look, it's sleeker and faster.
+#### 🧠 Smarter Title Recognition
+- **Semicolon Bug Fixed**: Fixed a critical bug where having a semicolon `;` in your filename (like `That Time I Got Reincarnated as a Slime the Movie; Tears of the Azure Sea`) would cause the parser to crash internally, stripping subtitles and wrongly recognizing it as older movies (like Scarlet Bond). It is now **100% robust** and perfectly handles complex subtitles.
 
-#### 🖼️ Flawless Cover Art
-- **Zero-CORS Cover Engine**: Rewrote the cover image fetching engine. The web dashboard will now flawlessly display high-quality cover art for *every single anime* by securely bypassing strict browser Content Security Policies (CSP) using base64 data URIs!
-- **Reliable Fallbacks**: If you're offline, it smartly falls back to VLC's embedded art.
+#### 🖼️ Snapshot Covers Fixed in App
+- **UI Snapshots Restored**: Fixed an issue where the auto-generated scene snapshot (when no online cover exists) would show up perfectly in Discord, but appear broken inside the tool's dashboard. The UI now flawlessly loads your snapshots using secure base64 data encoding!
 
-#### 🍎 UI Enhancements
-- **macOS-Style Toasts**: Continued polish on our sleek, animated dark-mode toast notifications!
-
-### 🔧 Fixes & Tweaks
-- Fixed an annoying bug where Discord would show the cover image but the desktop app wouldn't.
-- System Tray integration improvements.
-
-Enjoy the new update! 🎉
+Enjoy the flawless tracking! 🎉
 """
 
     try:
