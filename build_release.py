@@ -57,16 +57,16 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v4.9.1"
+    tag_name = "v4.9.2"
     
-    release_title = "🩹 v4.9.1 - Hotfix: Perfect Title Recognition & Snapshot Covers"
-    release_notes = """### 🚀 What's Fixed in v4.9.1!
+    release_title = "🐛 v4.9.2 - Critical Hotfix: AniList Sync Now Bulletproof"
+    release_notes = """### 🚀 What's Fixed in v4.9.2!
 
-#### 🧠 Smarter Title Recognition
-- **Semicolon Bug Fixed**: Fixed a critical bug where having a semicolon `;` in your filename (like `That Time I Got Reincarnated as a Slime the Movie; Tears of the Azure Sea`) would cause the parser to crash internally, stripping subtitles and wrongly recognizing it as older movies (like Scarlet Bond). It is now **100% robust** and perfectly handles complex subtitles.
-
-#### 🖼️ Snapshot Covers Fixed in App
-- **UI Snapshots Restored**: Fixed an issue where the auto-generated scene snapshot (when no online cover exists) would show up perfectly in Discord, but appear broken inside the tool's dashboard. The UI now flawlessly loads your snapshots using secure base64 data encoding!
+#### 🔗 AniList Sync - Completely Rebuilt
+- **Critical Bug Fixed**: Watching *You and I Are Polar Opposites* was syncing to **One Piece** (!!). The old sync logic used a dangerously fuzzy "substring" matching system. Any short title on your list (or from a page search) could accidentally match a completely unrelated anime. **This is now completely fixed.**
+- **Smart Cache-First ID**: The syncer now first uses the `anilistId` already stored from the metadata fetch. This ID was already verified correct by a specific title search, making it 100% reliable.
+- **Strict Title Matching**: Replaced the loose fuzzy matcher with a precise, exact-match comparison. Short titles can no longer falsely match long ones.
+- **Safer Page Fallback**: The global AniList search fallback now validates the returned title matches the search query before accepting it — no more picking random anime just because they're the right format.
 
 Enjoy the flawless tracking! 🎉
 """

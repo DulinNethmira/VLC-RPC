@@ -71,7 +71,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.9.1"
+CURRENT_VERSION = "4.9.2"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -693,16 +693,24 @@ class RPCBackend:
             viewer_data = _gql({"query": "query { Viewer { id } }"})
             viewer_id = (viewer_data.get("data") or {}).get("Viewer", {}).get("id")
 
-            # ── Step 1b: User active-list lookup (solves season ambiguity) ─
+            # ── Step 1a (fast path): use the anilistId we already fetched during metadata ─
+            # This is the MOST reliable source — it was verified by a title-specific
+            # AniList search when the file first started playing.
             media_id = None
             total_episodes = None
+            cached_meta = self.state_data.get("metadata") or {}
+            if cached_meta.get("anilistId"):
+                media_id = cached_meta["anilistId"]
+                total_episodes = cached_meta.get("total_episodes")
+                self.anilist_log(f"[Fast] Using cached AniList ID {media_id} for '{title}'")
+
             def _normalize(text):
                 if not text: return ""
                 return re.sub(r'[^\w\s]', ' ', text).strip().lower()
 
             search_normalized = _normalize(re.sub(r'\s*\(\d{4}\)', '', title))
 
-            if viewer_id:
+            if viewer_id and not media_id:
                 list_q = """
                 query ($userId: Int) {
                   MediaListCollection(userId: $userId, type: ANIME,
@@ -715,15 +723,34 @@ class RPCBackend:
                 lists_data = _gql({"query": list_q, "variables": {"userId": viewer_id}})
 
                 def _match(media):
+                    """Match only when the title is a strong, exact-word match.
+                    Avoids false positives like 'One Piece' matching 'Polar Opposites'."""
                     cands = []
                     t = media.get("title") or {}
                     if t.get("english"): cands.append(_normalize(t["english"]))
                     if t.get("romaji"):  cands.append(_normalize(t["romaji"]))
                     for syn in (media.get("synonyms") or []):
-                        cands.append(_normalize(syn))
-                    # Remove all spaces for even fuzzier matching (handles missing spaces)
-                    search_compact = re.sub(r'\s+', '', search_normalized)
-                    return any(search_compact in re.sub(r'\s+', '', c) or re.sub(r'\s+', '', c) in search_compact for c in cands)
+                        if syn:
+                            cands.append(_normalize(syn))
+                    # Only match if search_normalized is an exact match or very close.
+                    # We do NOT allow short candidates to be "contained in" the search
+                    # as that causes false positives (e.g. 'I' being in every title).
+                    for c in cands:
+                        if not c:
+                            continue
+                        # Exact match
+                        if search_normalized == c:
+                            return True
+                        # Allow minor variations: strip all non-alphanumeric and compare
+                        s_clean = re.sub(r'[^a-z0-9]', '', search_normalized)
+                        c_clean = re.sub(r'[^a-z0-9]', '', c)
+                        if s_clean and c_clean and s_clean == c_clean:
+                            return True
+                        # Allow if search starts with candidate (handles "Title Season 2" vs "Title")
+                        # but only if candidate is long enough (≥ 8 chars) to avoid short false matches
+                        if len(c_clean) >= 8 and c_clean and s_clean.startswith(c_clean):
+                            return True
+                    return False
 
                 mlc = (lists_data.get("data") or {}).get("MediaListCollection") or {}
                 for lst in mlc.get("lists", []):
@@ -737,7 +764,7 @@ class RPCBackend:
                     if media_id:
                         break
 
-            # ── Step 1c: Page search fallback with structural check ─────────
+            # ── Step 1c: Page search fallback ─────────────────────────────────
             if not media_id:
                 page_q = """
                 query ($search: String, $type: MediaType) {
@@ -752,20 +779,28 @@ class RPCBackend:
                                    "variables": {"search": search_normalized, "type": "ANIME"}})
                 candidates = ((page_data.get("data") or {}).get("Page") or {}).get("media", [])
                 for m in candidates:
-                    fmt = (m.get("format") or "").upper()
-                    eps = m.get("episodes")
-                    if fmt in ("TV", "TV_SHORT", "ONA", "OVA", "SPECIAL") or \
-                       (eps and eps >= episode_num):
+                    t = m.get("title", {})
+                    found_title = _normalize(t.get("english") or t.get("romaji") or "")
+                    # CRITICAL: Only accept this candidate if its title actually resembles
+                    # our search. Never pick a result just because it's a TV format.
+                    s_clean = re.sub(r'[^a-z0-9]', '', search_normalized)
+                    f_clean = re.sub(r'[^a-z0-9]', '', found_title)
+                    if not s_clean or not f_clean:
+                        continue
+                    # Accept if result title starts with our search or vice versa (min 8 chars)
+                    title_match = (s_clean == f_clean or
+                                   (len(s_clean) >= 8 and f_clean.startswith(s_clean)) or
+                                   (len(f_clean) >= 8 and s_clean.startswith(f_clean)))
+                    if title_match:
                         media_id = m["id"]
-                        total_episodes = eps
-                        t = m.get("title", {})
-                        found = t.get("english") or t.get("romaji") or title
-                        self.anilist_log(f"[Global] Matched '{found}' -> ID {media_id}")
+                        total_episodes = m.get("episodes")
+                        display = t.get("english") or t.get("romaji") or title
+                        self.anilist_log(f"[Global] Matched '{display}' -> ID {media_id}")
                         break
 
             if not media_id:
                 self.anilist_log(f"[Error] Could not resolve '{title}' to any AniList ID.")
-                return False
+                return False, "CURRENT"
 
             # ── Step 2: Status logic ────────────────────────────────────────
             new_status = "COMPLETED" \
