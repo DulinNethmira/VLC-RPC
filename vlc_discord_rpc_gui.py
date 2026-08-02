@@ -71,7 +71,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.9.0"
+CURRENT_VERSION = "4.9.1"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -298,6 +298,9 @@ def clean_title(title):
     
     # Un-camelcase words for messy filenames (e.g., "ReZero" -> "Re Zero")
     title = re.sub(r'([a-z])([A-Z])', r'\1 \2', title)
+
+    # Convert semicolons to colons to prevent guessit stack overflows and preserve subtitle structure
+    title = title.replace(';', ':')
 
     loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\.\-:&!,]+?)[\s\._]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
     if loose_ep:
@@ -1431,7 +1434,12 @@ class RPCBackend:
                 self.log(f"[Snapshot] ffmpeg failed (code {result.returncode}): {stderr_msg}")
                 return
 
-            # Upload to Imgur (free, direct hotlinking)
+            # Store the raw image as base64 for the webview frontend to avoid CORS issues
+            import base64
+            snapshot_b64 = "data:image/jpeg;base64," + base64.b64encode(result.stdout).decode('utf-8')
+            self.state_data['scene_snapshot_data_uri'] = snapshot_b64
+
+            # Upload to Imgur (free, direct hotlinking) for Discord RPC
             upload = requests.post(
                 "https://api.imgur.com/3/image",
                 headers={"Authorization": "Client-ID 546c25a59c58ad7"},
