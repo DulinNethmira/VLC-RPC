@@ -71,7 +71,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.9.2"
+CURRENT_VERSION = "4.9.3"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -296,7 +296,19 @@ def clean_title(title):
     title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
     title = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
     
-    # Un-camelcase words for messy filenames (e.g., "ReZero" -> "Re Zero")
+    # Step 1: Process [brackets] FIRST before un-camelcasing.
+    # This converts subtitle-style brackets like [Heaven's Feel] to ': Heaven\'s Feel'
+    # so guessit treats it as part of the title, not a release group.
+    # Must run BEFORE un-camelcase to keep [SubsPlease] as one word.
+    def _bracket_to_subtitle(m):
+        c = m.group(1).strip()
+        # Real release tags: single word, no spaces or apostrophes
+        if ' ' not in c and "'" not in c and re.match(r'^[\w\-\.]+$', c):
+            return m.group(0)  # keep: e.g. [SubsPlease], [1080p]
+        return ': ' + c        # subtitle: e.g. [Heaven's Feel]
+    title = re.sub(r'\[([^\]]+)\]', _bracket_to_subtitle, title)
+
+    # Step 2: Un-camelcase words for messy filenames (e.g., "ReZero" -> "Re Zero")
     title = re.sub(r'([a-z])([A-Z])', r'\1 \2', title)
 
     # Convert semicolons to colons to prevent guessit stack overflows and preserve subtitle structure
@@ -343,9 +355,28 @@ def clean_title(title):
                     if isinstance(episode, list): episode = episode[0]
                     episode_str = f"Episode {episode}"
 
-            # Title-case while preserving uppercase acronyms (e.g. "YIFY"->"Yify" is fine)
+            # If guessit put a subtitle like [Heaven's Feel] in release_group, reattach it.
+            # Real groups (SubsPlease, YIFY) have no spaces/apostrophes.
+            release_group = guessed.get('release_group')
+            if release_group and isinstance(release_group, str):
+                rg = release_group.strip()
+                if ("'" in rg or " " in rg) and len(rg) > 3 and cleaned and rg.lower() not in cleaned.lower():
+                    cleaned = cleaned + ": " + rg
+
+            # Also check alternative_title
+            alt_title = guessed.get('alternative_title')
+            if alt_title and isinstance(alt_title, str) and cleaned:
+                at = alt_title.strip()
+                if at and at.lower() not in cleaned.lower():
+                    cleaned = cleaned + " " + at
+
+            # Smart title-case: preserve ALL-CAPS acronyms (II stays II, not Ii)
+            def _smart_cap(w):
+                if not w: return w
+                if w.isupper() and len(w) <= 5: return w
+                return '-'.join(p.capitalize() for p in w.split('-'))
             if cleaned and isinstance(cleaned, str):
-                cleaned = ' '.join(w.capitalize() for w in str(cleaned).split())
+                cleaned = ' '.join(_smart_cap(w) for w in str(cleaned).split())
 
             return str(cleaned), episode_str
         except Exception:
@@ -1729,6 +1760,8 @@ class RPCBackend:
                         self.state_data["metadata"] = None
                         self.state_data["local_image_path"] = None
                         self.state_data["scene_snapshot_url"] = ""  # clear snapshot for new file
+                        self.state_data["scene_snapshot_data_uri"] = ""
+                        self.state_data["snapshot_id"] = ""
                         art_data_uri = ""
                         vlc_art_url = meta.get("artwork_url", "")
                         try:

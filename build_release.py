@@ -57,18 +57,31 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v4.9.2"
+    tag_name = "v4.9.3"
     
-    release_title = "🐛 v4.9.2 - Critical Hotfix: AniList Sync Now Bulletproof"
-    release_notes = """### 🚀 What's Fixed in v4.9.2!
+    release_title = "✨ v4.9.3 - Smart Title Recognition & Cover Image Fixes"
+    release_notes = """### 🚀 What's New in v4.9.3!
 
-#### 🔗 AniList Sync - Completely Rebuilt
-- **Critical Bug Fixed**: Watching *You and I Are Polar Opposites* was syncing to **One Piece** (!!). The old sync logic used a dangerously fuzzy "substring" matching system. Any short title on your list (or from a page search) could accidentally match a completely unrelated anime. **This is now completely fixed.**
-- **Smart Cache-First ID**: The syncer now first uses the `anilistId` already stored from the metadata fetch. This ID was already verified correct by a specific title search, making it 100% reliable.
-- **Strict Title Matching**: Replaced the loose fuzzy matcher with a precise, exact-match comparison. Short titles can no longer falsely match long ones.
-- **Safer Page Fallback**: The global AniList search fallback now validates the returned title matches the search query before accepting it — no more picking random anime just because they're the right format.
+A focused quality-of-life update that fixes some frustrating edge cases you've been reporting.
 
-Enjoy the flawless tracking! 🎉
+#### 🔍 Title Recognition — Now Smarter Than Ever
+- **Fixed Bracket Subtitles**: Filenames like `Fate Stay Night [Heaven's Feel] II. lost butterfly.mkv` now correctly extract `Heaven's Feel` as part of the title instead of treating it as a release group (which previously caused misidentification).
+- **Fixed Subtitle Capitalization**: Words like `II`, `OVA`, `TV` and other ALL-CAPS abbreviations are now preserved correctly. No more `Ii Lost Butterfly`!
+- **Fixed SubsPlease Misparse**: Files tagged as `[SubsPlease]` or other release groups no longer get confused with subtitle text. The parser now correctly distinguishes single-word tags from prose subtitles.
+- **Semicolon Filenames**: Movies with semicolons like `Tears of the Azure Sea; Chapter 2.mkv` continue to be parsed correctly (no stack overflow).
+
+#### 🖼️ Cover Image Fixes
+- **Snapshot Persistence Bug Fixed**: The scene snapshot from the previous video no longer lingers on-screen when switching to a new file. It's now properly cleared the moment playback changes.
+- **Cover Image Data Cleared on Switch**: All associated image data is reset when a new media file starts, ensuring you always see the correct artwork.
+
+#### 🔗 AniList Sync (Inherited from v4.9.2)
+- Cross-title false matches (e.g., *Polar Opposites* syncing to *One Piece*) remain fully fixed.
+
+### 🔧 Under the Hood
+- Bracket processing now runs before camelCase splitting to prevent release group name corruption.
+- Smart title-casing function added to handle all-uppercase words correctly.
+
+Enjoy the cleaner experience! 🎉
 """
 
     try:
