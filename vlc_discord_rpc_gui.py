@@ -2513,11 +2513,7 @@ class RPCBackend:
 
 
             new_status = "COMPLETED" \
-
-
                 if (total_episodes and episode_num >= total_episodes) \
-
-
                 else "CURRENT"
 
 
