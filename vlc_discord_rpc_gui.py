@@ -71,7 +71,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.9.3"
+CURRENT_VERSION = "4.9.6"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -293,6 +293,7 @@ def clean_title(title):
     Works for both anime/TV  (S01E04, Episode 4) and movies
     (American.Sniper.2014.720p.BluRay…)."""
     title = str(title or "")
+    title = re.sub(r'^\d+[\.\-]\s+', '', title)
     title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
     title = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
     
@@ -466,7 +467,6 @@ def load_config():
                     config[k] = v
             return config
     except Exception:
-        return None
         return DEFAULT_CONFIG.copy()
 
 def save_config(config):
@@ -548,6 +548,10 @@ class RPCBackend:
 
         self.worker_thread = threading.Thread(target=self.rpc_worker, daemon=True)
         self.worker_thread.start()
+        
+        # Trigger an initial widget sync on startup
+        threading.Thread(target=self.force_sync_widget, daemon=True).start()
+        threading.Thread(target=self.force_sync_widget_v2, daemon=True).start()
 
     def log(self, msg, toast_title=None, toast_icon="info"):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -558,7 +562,7 @@ class RPCBackend:
             except Exception:
                 pass
         if toast_title:
-            notifier.toast(toast_title, msg, icon_type=toast_icon)
+            show_toast(toast_title, msg, icon=toast_icon)
 
     def load_history(self):
         if getattr(sys, 'frozen', False):
@@ -573,7 +577,6 @@ class RPCBackend:
             with open(history_path, "r") as f:
                 return json.load(f)
         except Exception:
-            return None
             return []
 
     def save_history(self):
@@ -624,7 +627,6 @@ class RPCBackend:
                 try:
                     return tuple(int(x) for x in v.strip().split("."))
                 except Exception:
-                    return None
                     return (0,)
 
             if _parse(latest_tag) > _parse(CURRENT_VERSION):
@@ -700,7 +702,7 @@ class RPCBackend:
         token = self.config.get("anilist_token")
         if not token:
             self.anilist_log("[Error] No AniList token — connect via Integrations tab.")
-            return False
+            return False, "CURRENT"
 
         headers = {
             'Authorization': f'Bearer {token}',
@@ -854,6 +856,11 @@ class RPCBackend:
             if entry.get("id"):
                 emoji = "[OK]" if new_status == "CURRENT" else "[DONE]"
                 self.anilist_log(f"{emoji} Updated! '{title}' E{entry['progress']} -> {entry['status']}")
+                
+                # Trigger widget sync after successful update
+                threading.Thread(target=self.force_sync_widget, daemon=True).start()
+                threading.Thread(target=self.force_sync_widget_v2, daemon=True).start()
+                
                 return True, new_status
             else:
                 errors = result.get("errors", [])
@@ -1130,8 +1137,6 @@ class RPCBackend:
             except Exception as e:
                 self.log(f"Failed to trigger score popup: {e}")
     def check_auto_sync(self):
-        from win10toast import ToastNotifier
-        toaster = ToastNotifier()
         if not self.config.get("anilist_token"):
             return
         if not self.state_data.get("vlc_connected"):
@@ -1370,7 +1375,6 @@ class RPCBackend:
             return f"rgba({color[0]}, {color[1]}, {color[2]}, 0.8)"
         except Exception:
             return None
-            return None
 
     def normalize_cover_url(self, url):
         """Return a Discord/UI-safe image URL, or None if it is not usable."""
@@ -1546,7 +1550,6 @@ class RPCBackend:
             with open(cache_path, "r") as f:
                 return json.load(f)
         except Exception:
-            return None
             return {}
 
     def save_metadata_cache(self):
@@ -1711,6 +1714,7 @@ class RPCBackend:
                 auth = HTTPBasicAuth('', self.config.get("vlc_password", ""))
                 url = f"http://{self.config.get('vlc_host', 'localhost')}:{self.config.get('vlc_port', 8080)}/requests/status.json"
                 r = requests.get(url, auth=auth, timeout=2)
+                r.encoding = 'utf-8'
                 
                 if r.status_code == 200:
                     vlc_data = r.json()
@@ -2139,6 +2143,7 @@ class RPCBackend:
                                 try:
                                     pl_url = f"http://{self.config.get('vlc_host','localhost')}:{self.config.get('vlc_port',8080)}/requests/playlist.json"
                                     pl_r = requests.get(pl_url, auth=HTTPBasicAuth('', self.config.get('vlc_password', '')), timeout=3)
+                                    pl_r.encoding = 'utf-8'
                                     if pl_r.status_code == 200:
                                         def _find_uri(node, plid):
                                             if str(node.get("id", "")) == plid:
@@ -2571,7 +2576,6 @@ class WebApi:
             save_config(self.backend.config)
             return {"success": True}
         except Exception as e:
-            return None
             return {"success": False, "error": str(e)}
             
     def open_url(self, url):
@@ -2582,7 +2586,7 @@ class WebApi:
     def sync_discord_widget(self):
         threading.Thread(target=self.backend.force_sync_widget, daemon=True).start()
         threading.Thread(target=self.backend.force_sync_widget_v2, daemon=True).start()
-        return jsonify({"success": True})
+        return {"success": True}
             
     def force_update(self):
         """Force Sync button: clears stuck cover, resets metadata, and re-triggers RPC update."""
@@ -2641,7 +2645,6 @@ class WebApi:
                     try:
                         return tuple(int(x) for x in v.strip().split("."))
                     except Exception:
-                        return None
                         return (0,)
 
                 if _parse(latest_tag) > _parse(CURRENT_VERSION):
@@ -2669,7 +2672,6 @@ class WebApi:
                 else:
                     return {"update_available": False, "current_version": CURRENT_VERSION}
             except Exception as e:
-                return None
                 return {"update_available": False, "current_version": CURRENT_VERSION, "error": str(e)}
 
         import concurrent.futures
@@ -2728,7 +2730,6 @@ class WebApi:
                              creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
             os._exit(0)
         except Exception as e:
-            return None
             return {"success": False, "error": str(e)}
 
     def auth_discord_widget(self):
@@ -2775,7 +2776,6 @@ class WebApi:
                 
             return {"success": True, "history": history_list, "total_time": total_time}
         except Exception as e:
-            return None
             return {"success": False, "error": str(e)}
 
 
