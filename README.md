@@ -35,14 +35,17 @@ VLC RPC seamlessly connects your VLC Media Player to Discord. It shows your frie
 ### 📺 AniList Integration
 - **Secure OAuth 2.0** — Full Authorization Code Flow with a local callback server. Your credentials never leave your machine.
 - **Auto Episode Sync** — Automatically updates your AniList progress when you cross a configurable watch threshold (default: 80%).
+- **Auto-Score Popups** — Automatically prompts you to rate a series the moment you finish the final episode, matched to your AniList preference format.
+- **AniSkip Integration** — Automatically skips Openings (OP) and Endings (ED) if you're watching the correct episode based on AniList data.
 - **Smart Matching** — 2-tier search: checks your active AniList list first, then falls back to global database search with format validation.
 - **Real-time AniList Logs** — Dedicated in-app log panel shows every sync decision with color-coded entries for debugging.
 
-### 🖥️ Dashboard & Tracking
+### 📊 Dashboard & Tracking
 - **Modern WebView UI** — Beautiful glassmorphism design with ambient glow effects, 3D hover animations, and built with the Outfit font family.
-- **Dynamic Theming** — The UI automatically extracts the dominant color from your media's poster art to dynamically theme the interface and background glow.
-- **Live Watch History & Stats** — SQLite-backed history with live "Now Playing" indicator, aggregate watch time metrics, and graphical charts (via Chart.js) showing your media breakdown and weekly activity.
-- **Live Discord Preview** — See exactly how your rich presence will look on Discord inside the app in real-time.
+- **macOS-Style Toasts** — Elegant, animated dark-mode toast notifications for app events!
+- **Custom Accent Themes** — Choose from a variety of modern UI accent themes in Preferences to match your aesthetic (Discord Blurple, Ruby Red, Emerald Green, Neon Purple, etc).
+- **Anime Wrapped (Analytics)** — Generate and download a beautiful image of your "Anime Wrap" directly from the Analytics tab to share with your friends. Features deep stats like Average Session Length, Most Binge-Watched Day, and Total Hours!
+- **Live Discord Preview & Toggle** — See exactly how your rich presence will look on Discord inside the app in real-time. Instantly toggle your Discord Activity ON/OFF directly from the Dashboard with a single click.
 - **Interactive Developer Console** — Built-in terminal drawer that streams internal backend logs and RPC events in real-time for easy debugging.
 - **System Tray & Registry Startup** — Minimizes to tray and uses a clean, silent Windows Registry injection for automatic booting on PC startup without flashing console windows. Less than 50MB RAM footprint.
 - **Low-End CPU Hibernation** — Automatically enters a 12-second idle poll when VLC is closed, conserving resources.
