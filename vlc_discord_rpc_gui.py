@@ -71,7 +71,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.9.6"
+CURRENT_VERSION = "4.9.7"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -2041,11 +2041,15 @@ class RPCBackend:
 
             if rpc and self.state_data["rpc_connected"]:
                 if not self.state_data["vlc_connected"] or self.state_data["playback_state"] not in ["playing", "paused"]:
-                    try:
-                        rpc.clear()
-                    except Exception:
-                        pass
+                    if not getattr(self, "_last_rpc_cleared", False):
+                        try:
+                            rpc.clear()
+                            self._last_rpc_cleared = True
+                            self._last_rpc_kwargs = {}
+                        except Exception:
+                            pass
                 else:
+                    self._last_rpc_cleared = False
                     try:
                         kwargs = {}
                         media_type = self.state_data.get("media_type", "movie")
@@ -2246,7 +2250,28 @@ class RPCBackend:
                         if buttons:
                             kwargs["buttons"] = buttons
 
-                        rpc.update(**kwargs)
+                        def _is_significant_change(old, new):
+                            if not old: return True
+                            if set(old.keys()) != set(new.keys()): return True
+                            for k, v in new.items():
+                                if k in ['start', 'end'] and isinstance(v, (int, float)):
+                                    old_v = old.get(k)
+                                    if not isinstance(old_v, (int, float)) or abs(v - old_v) > 3:
+                                        return True
+                                elif old.get(k) != v:
+                                    return True
+                            return False
+
+                        last_kwargs = getattr(self, "_last_rpc_kwargs", {})
+                        if _is_significant_change(last_kwargs, kwargs):
+                            now = time.time()
+                            last_update = getattr(self, "_last_rpc_update_time", 0)
+                            # Discord IPC strictly rate-limits updates (usually max 1 per 15s).
+                            # Buffering it to 5s is a good balance and prevents dropping connections.
+                            if now - last_update >= 5:
+                                rpc.update(**kwargs)
+                                self._last_rpc_kwargs = kwargs.copy()
+                                self._last_rpc_update_time = now
                     except Exception:
                         # RPC update failed — close and schedule reconnect with backoff
                         try:
