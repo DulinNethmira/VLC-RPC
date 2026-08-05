@@ -57,14 +57,23 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v4.9.7"
+    tag_name = "v4.9.8"
     
-    release_title = "🛡️ v4.9.7 - Discord Stability & Rate Limit Fix"
-    release_notes = """### 🚀 What's New in v4.9.7!
+    release_title = "✨ v4.9.8 - Massive Feature Update: Analytics & Themes!"
+    release_notes = """### 🚀 What's New in v4.9.8!
 
-#### 🐛 The Fixes
-- **Discord Connection Drops Fixed**: Solved an issue where the Discord Rich Presence would constantly disconnect and reconnect (spamming "Connected to Discord!" notifications) while watching an episode. This was caused by the app sending playback time updates to Discord too rapidly, which triggered Discord's internal anti-spam rate limits, causing it to sever the connection. 
-- The app now smartly buffers time fluctuations and strictly adheres to Discord's IPC rate limits, ensuring a rock-solid, uninterrupted connection!
+#### 📊 Advanced Analytics
+- **New Stats**: Added Average Session Length and Most Binge-Watched Day!
+- **UI Enhancements**: Weekly Activity chart now properly displays in Hours instead of Minutes, and we fixed the 119 Hours bug!
+- **Share Anime Wrap**: Generate and download a beautiful image of your Anime Wrap directly from the Analytics tab to share with your friends!
+
+#### 🎨 Custom Accent Themes
+- **Personalize Your App**: Added a new Theme selector in the Preferences tab! Choose from Discord Blurple, Ruby Red, Emerald Green, Neon Purple, Sunset Orange, Hot Pink, or Cyan Blue.
+
+#### ⚙️ Quality of Life Fixes
+- **Discord RPC Toggle**: You can now instantly toggle your Discord Activity ON/OFF directly from the Dashboard using the new `RPC Active` button!
+- **Sidebar Version**: Added a sleek version tracker to the sidebar so you always know what version you're on.
+- **Log Improvements**: Fixed an issue where Gemini AI would spam "Failed to resolve title" logs. It now auto-retries elegantly in the background once every hour!
 """
 
     try:

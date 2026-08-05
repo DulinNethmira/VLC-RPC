@@ -71,7 +71,7 @@ CACHE_FILE = "metadata_cache.json"
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "4.9.7"
+CURRENT_VERSION = "4.9.8"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 
 DEFAULT_CONFIG = {
@@ -1838,7 +1838,7 @@ class RPCBackend:
                         # Spawn a new thread if: never tried, OR last failure was >60s ago
                         should_try = (
                             raw_name not in self.gemini_cache
-                            or (cached is None and time.time() - last_fail > 300)
+                            or (cached is None and time.time() - last_fail > 3600)
                         )
                         if should_try:
                             self.gemini_cache[raw_name] = "pending"
@@ -1854,10 +1854,10 @@ class RPCBackend:
                                     except Exception:
                                         pass
                                 else:
-                                    # Don't permanently block — allow retry after 60s
+                                    # Don't permanently block - allow retry after 1 hour
                                     self.gemini_cache[name] = None
                                     self.gemini_fail_times[name] = time.time()
-                                    self.anilist_log(f"[Gemini AI] Failed to resolve title. Retrying in 60s.")
+                                    self.anilist_log(f"[Gemini AI] Failed to resolve title. (Auto-retry in 1h)")
                             threading.Thread(target=_run_gemini, args=(raw_name, gemini_key), daemon=True).start()
 
                         cached = self.gemini_cache.get(raw_name)
@@ -2040,7 +2040,7 @@ class RPCBackend:
                     rpc_backoff = min(rpc_backoff * 2, 30)  # exponential backoff, cap 30 s
 
             if rpc and self.state_data["rpc_connected"]:
-                if not self.state_data["vlc_connected"] or self.state_data["playback_state"] not in ["playing", "paused"]:
+                if not getattr(self, 'rpc_enabled', True) or not self.state_data["vlc_connected"] or self.state_data["playback_state"] not in ["playing", "paused"]:
                     if not getattr(self, "_last_rpc_cleared", False):
                         try:
                             rpc.clear()
@@ -2540,12 +2540,24 @@ class WebApi:
     def get_state(self):
         return self.backend.state_data
         
+    def toggle_rpc(self):
+        self.backend.rpc_enabled = not getattr(self.backend, 'rpc_enabled', True)
+        if not self.backend.rpc_enabled:
+            self.backend.log("Discord Rich Presence temporarily disabled by user.")
+        else:
+            self.backend.log("Discord Rich Presence re-enabled.")
+            self.backend._last_rpc_cleared = False
+        return self.backend.rpc_enabled
+
     def get_stats(self):
         stats = {
             "total_watch_time": 0,
             "media_types": {"anime": 0, "movie": 0, "tv_show": 0, "music": 0},
             "recent_activity": [0] * 7,
-            "history": []
+            "history": [],
+            "avg_session_minutes": 0,
+            "binge_day": "--",
+            "binge_hours": 0
         }
         try:
             db_path = getattr(self.backend, 'db_path', None)
@@ -2575,7 +2587,20 @@ class WebApi:
                 day_str = day.strftime("%Y-%m-%d")
                 c.execute("SELECT SUM(watch_duration) FROM history WHERE timestamp LIKE ?", (day_str + "%",))
                 r = c.fetchone()
-                stats["recent_activity"][i] = round((r[0] or 0) / 60, 1)
+                stats["recent_activity"][i] = round((r[0] or 0) / 3600, 1)
+
+            # Average session length (minutes)
+            c.execute("SELECT COUNT(*) FROM history WHERE watch_duration > 0")
+            total_sessions = c.fetchone()[0] or 1
+            if total_sessions > 0 and stats["total_watch_time"] > 0:
+                stats["avg_session_minutes"] = round((stats["total_watch_time"] / total_sessions) / 60, 1)
+
+            # Most Binge-Watched Day
+            c.execute("SELECT substr(timestamp, 1, 10) as day, SUM(watch_duration) as dur FROM history GROUP BY day ORDER BY dur DESC LIMIT 1")
+            binge_res = c.fetchone()
+            if binge_res and binge_res[1]:
+                stats["binge_day"] = binge_res[0]
+                stats["binge_hours"] = round(binge_res[1] / 3600, 1)
 
             # Recent history list (last 50 entries)
             c.execute("SELECT title, episode_str, is_music, watch_duration, timestamp FROM history ORDER BY id DESC LIMIT 50")
