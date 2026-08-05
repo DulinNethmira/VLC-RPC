@@ -1,4 +1,11 @@
 // ===== Format Time =====
+function formatTotalHours(seconds) {
+    if (isNaN(seconds) || seconds <= 0) return "0h 0m";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h > 0) return h + "h " + m + "m";
+    return m + "m";
+}
 function formatTime(seconds) {
     if (isNaN(seconds) || seconds < 0) return "0:00";
     const h = Math.floor(seconds / 3600);
@@ -209,7 +216,8 @@ function saveConfig() {
         gemini_api_key: document.getElementById('gemini_api_key').value,
         scene_snapshots: document.getElementById('scene_snapshots').value === 'true',
         aniskip_auto_skip: document.getElementById('aniskip_auto_skip').checked,
-        auto_score_popup: document.getElementById('auto_score_popup').checked
+        auto_score_popup: document.getElementById('auto_score_popup').checked,
+        theme_color: document.getElementById('theme_selector').value
     };
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.save_config(config).then(function(response) {
@@ -223,6 +231,25 @@ function saveConfig() {
         });
     }
 }
+
+window.applyTheme = function(color) {
+    document.documentElement.style.setProperty('--accent-blurple', color);
+    let r = parseInt(color.slice(1, 3), 16),
+        g = parseInt(color.slice(3, 5), 16),
+        b = parseInt(color.slice(5, 7), 16);
+    document.documentElement.style.setProperty('--glow-color', 
+gba(\, \, \, 0.4));
+
+    if (weeklyBarChart) {
+        weeklyBarChart.data.datasets[0].backgroundColor = color;
+        weeklyBarChart.update();
+    }
+    if (window._anaWeeklyChart) {
+        window._anaWeeklyChart.data.datasets[0].backgroundColor = color;
+        window._anaWeeklyChart.data.datasets[0].borderColor = color;
+        window._anaWeeklyChart.update();
+    }
+};
 
 function switchTab(tabId) {
     document.querySelectorAll('.tab-content').forEach(t => {
@@ -336,6 +363,10 @@ function initPyWebview() {
         document.getElementById('scene_snapshots').value = (config.scene_snapshots !== false) ? 'true' : 'false';
         document.getElementById('aniskip_auto_skip').checked = !!config.aniskip_auto_skip;
         document.getElementById('auto_score_popup').checked = (config.auto_score_popup !== false);
+        if (config.theme_color) {
+            document.getElementById('theme_selector').value = config.theme_color;
+            applyTheme(config.theme_color);
+        }
     });
     
     document.getElementById('btn-anilist-login').addEventListener('click', (e) => {
@@ -498,6 +529,22 @@ window.toggleConsole = function() {
         icon.className = 'fas fa-chevron-up';
     }
 };
+window.toggleDiscordRPC = function() {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.toggle_rpc().then(enabled => {
+            const btn = document.getElementById('btn-toggle-rpc');
+            if (enabled) {
+                btn.innerHTML = '<i class="fas fa-power-off"></i> RPC Active';
+                btn.style.borderColor = '#34d399';
+                btn.style.color = '#34d399';
+            } else {
+                btn.innerHTML = '<i class="fas fa-power-off"></i> RPC Paused';
+                btn.style.borderColor = '#ef4444';
+                btn.style.color = '#ef4444';
+            }
+        });
+    }
+};
 
 // ===== Advanced Stats & Graphs =====
 let mediaPieChart = null;
@@ -506,7 +553,7 @@ let weeklyBarChart = null;
 window.fetchStats = function() {
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.get_stats().then(stats => {
-            document.getElementById('total-time-large').textContent = formatTime(stats.total_watch_time);
+            document.getElementById('total-time-large').textContent = formatTotalHours(stats.total_watch_time);
             
             // Render Pie Chart
             const pieCtx = document.getElementById('mediaPieChart').getContext('2d');
@@ -543,7 +590,7 @@ window.fetchStats = function() {
                 data: {
                     labels: days,
                     datasets: [{
-                        label: 'Watch Time (Minutes)',
+                        label: 'Watch Time (Hours)',
                         data: stats.recent_activity,
                         backgroundColor: '#5865F2',
                         borderRadius: 4
@@ -755,3 +802,29 @@ function loadAnalytics() {
         });
     }).catch(err => console.error('Analytics error:', err));
 }
+
+
+window.shareAnimeWrap = function() {
+    const wrapArea = document.getElementById('tab-analytics');
+    if (typeof html2canvas === 'undefined') {
+        alert("Screenshot engine is loading... please try again in a few seconds.");
+        return;
+    }
+    const oldBg = wrapArea.style.background;
+    wrapArea.style.background = '#08080c';
+    wrapArea.style.padding = '20px';
+    wrapArea.style.borderRadius = '16px';
+    
+    html2canvas(wrapArea, {
+        backgroundColor: '#08080c',
+        scale: 2
+    }).then(canvas => {
+        wrapArea.style.background = oldBg;
+        wrapArea.style.padding = '';
+        wrapArea.style.borderRadius = '';
+        const link = document.createElement('a');
+        link.download = 'Anime-Wrap-' + new Date().toISOString().slice(0, 10) + '.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+    });
+};
