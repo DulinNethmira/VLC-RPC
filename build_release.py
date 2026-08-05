@@ -57,16 +57,14 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v4.9.6"
+    tag_name = "v4.9.7"
     
-    release_title = "🔄 v4.9.6 - Discord Widget Auto-Sync Fix"
-    release_notes = """### 🚀 What's New in v4.9.6!
+    release_title = "🛡️ v4.9.7 - Discord Stability & Rate Limit Fix"
+    release_notes = """### 🚀 What's New in v4.9.7!
 
 #### 🐛 The Fixes
-- **Discord Profile Widget Auto-Sync**: Fixed a bug where the Discord Profile Widget (both v1 and v2) would only sync once when you first connected it, and would get stuck on old episode counts (e.g., stuck on 3967 episodes) even after watching new shows. 
-- The app now automatically syncs your fresh AniList stats to your Discord profile **every time you start the app**, and immediately attempts a sync **every time you finish watching an episode**!
-
-Your Discord profile will now always stay up-to-date with your true AniList statistics! 🎉
+- **Discord Connection Drops Fixed**: Solved an issue where the Discord Rich Presence would constantly disconnect and reconnect (spamming "Connected to Discord!" notifications) while watching an episode. This was caused by the app sending playback time updates to Discord too rapidly, which triggered Discord's internal anti-spam rate limits, causing it to sever the connection. 
+- The app now smartly buffers time fluctuations and strictly adheres to Discord's IPC rate limits, ensuring a rock-solid, uninterrupted connection!
 """
 
     try:
