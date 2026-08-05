@@ -1,11 +1,19 @@
 <div align="center">
-  <img src="https://upload.wikimedia.org/wikipedia/commons/3/38/VLC_icon.png" alt="VLC Media Player" width="100"/>
-  <h1>VLC Discord RPC</h1>
-  <p><strong>The ultimate media companion — Discord Rich Presence, AniList auto-tracking, and a beautiful dashboard for VLC Media Player.</strong></p>
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:6366f1,100:8b5cf6&height=250&section=header&text=VLC%20Discord%20RPC&fontSize=70&fontColor=ffffff&animation=twinkling&desc=The%20Ultimate%20Media%20Companion&descAlignY=76&descAlign=62" width="100%" />
+
+  <img src="https://readme-typing-svg.demolab.com?font=Outfit&size=20&pause=1000&color=8B5CF6&center=true&vCenter=true&width=600&lines=Discord+Rich+Presence+for+VLC;Auto-Track+Anime+on+AniList;Advanced+Analytics+%26+Dashboard;The+Ultimate+Media+Companion" alt="Typing SVG" />
+
   <br>
-  <a href="https://github.com/DulinNethmira/VLC-RPC/releases/latest"><img src="https://img.shields.io/github/v/release/DulinNethmira/VLC-RPC?style=for-the-badge&color=blueviolet" alt="Release"/></a>
-  <a href="https://github.com/DulinNethmira/VLC-RPC/blob/main/LICENSE"><img src="https://img.shields.io/github/license/DulinNethmira/VLC-RPC?style=for-the-badge" alt="License"/></a>
-  <a href="https://github.com/DulinNethmira/VLC-RPC/releases/latest"><img src="https://img.shields.io/github/downloads/DulinNethmira/VLC-RPC/total?style=for-the-badge&color=green" alt="Downloads"/></a>
+
+  <a href="https://github.com/DulinNethmira/VLC-RPC/releases/latest"><img src="https://img.shields.io/github/v/release/DulinNethmira/VLC-RPC?style=for-the-badge&color=8B5CF6&logo=github&logoColor=white" alt="Release"/></a>
+  <a href="https://github.com/DulinNethmira/VLC-RPC/blob/main/LICENSE"><img src="https://img.shields.io/github/license/DulinNethmira/VLC-RPC?style=for-the-badge&color=6366F1&logo=open-source-initiative&logoColor=white" alt="License"/></a>
+  <a href="https://github.com/DulinNethmira/VLC-RPC/releases/latest"><img src="https://img.shields.io/github/downloads/DulinNethmira/VLC-RPC/total?style=for-the-badge&color=34D399&logo=docusign&logoColor=white" alt="Downloads"/></a>
+  
+  <br><br>
+  
+  <a href="https://skillicons.dev">
+    <img src="https://skillicons.dev/icons?i=python,html,css,js,sqlite,discord,github" />
+  </a>
 </div>
 
 <br>
@@ -14,115 +22,107 @@ VLC RPC seamlessly connects your VLC Media Player to Discord. It shows your frie
 
 ---
 
-## ✨ Features
+## ✨ Cutting-Edge Features
 
-### 🎯 Core Engine
-- **Gemini AI Title Parsing** — Optional integration with Google Gemini AI API to extract perfect titles and episode numbers from extremely messy, abbreviated, or non-standard video filenames that standard parsers fail on.
-- **Smart Title Parsing** — Built-in `GuessIt` engine strips scene tags (`1080p`, `x264`, `BluRay`, `YIFY`) to display clean titles like *The Matrix (1999)* or *One Piece Episode 1168*.
-- **Universal Out-of-the-Box** — Uses the official VLC Discord application ID. No need to create Discord developer apps or set up client IDs.
-- **Media Type Detection** — Automatically classifies content as **Anime**, **Movie**, **TV Show**, or **Music** and routes to the appropriate metadata provider.
+<details open>
+  <summary><b>📺 AniList Integration (Smart Sync)</b></summary>
+  <br>
+  
+  - **Secure OAuth 2.0** — Full Authorization Code Flow with a local callback server. Your credentials never leave your machine.
+  - **Auto Episode Sync** — Automatically updates your AniList progress when you cross a configurable watch threshold (default: 80%).
+  - **Auto-Score Popups** — Automatically prompts you to rate a series the moment you finish the final episode, matched to your AniList preference format.
+  - **AniSkip Integration** — Automatically skips Openings (OP) and Endings (ED) if you're watching the correct episode based on AniList data.
+  - **Smart Matching** — 2-tier search: checks your active AniList list first, then falls back to global database search with format validation.
+  - **Real-time AniList Logs** — Dedicated in-app log panel shows every sync decision with color-coded entries for debugging.
+</details>
 
-### 📡 Rich Discord Presence
-- **Live Scene Snapshots** — Takes a live frame capture from your local video (Anime/Movies) using FFmpeg and uploads it to display as the rich presence cover art instead of generic posters.
-- **Dynamic Status** — Shows "Watching", "Listening", or "Paused" with live progress bars and timestamps.
-- **Media Artwork** — Fetches high-quality posters from OMDb, Jikan (MyAnimeList), TVmaze, iTunes, and Wikipedia (when Snapshots are disabled).
-- **Interactive Buttons** — Adds clickable AniList/IMDb links directly on your Discord profile when available.
-- **Codec Badges** — Displays quality tags (4K, 1080p, HDR) and multi-audio track indicators.
+<details open>
+  <summary><b>📊 Next-Gen Dashboard & Analytics</b></summary>
+  <br>
+  
+  - **Anime Wrapped (Analytics)** — Generate and download a beautiful image of your "Anime Wrap" directly from the Analytics tab to share with your friends. Features deep stats like Average Session Length, Most Binge-Watched Day, and Total Hours!
+  - **Custom Accent Themes** — Choose from a variety of modern UI accent themes in Preferences to match your aesthetic (Discord Blurple, Ruby Red, Emerald Green, Neon Purple, etc).
+  - **Modern WebView UI** — Beautiful glassmorphism design with ambient glow effects, 3D hover animations, and built with the modern Outfit font family.
+  - **Live Discord Preview & Toggle** — See exactly how your rich presence will look on Discord inside the app in real-time. Instantly toggle your Discord Activity ON/OFF directly from the Dashboard with a single click.
+  - **macOS-Style Toasts** — Elegant, animated dark-mode toast notifications for app events!
+</details>
 
-### ⚡ Performance & Architecture
-- **Background Metadata Processing** — Network requests to metadata providers (OMDb, Jikan, Gemini) are run asynchronously to ensure the UI and RPC updates never freeze or lag.
+<details open>
+  <summary><b>🎯 Core Engine & Parsing</b></summary>
+  <br>
+  
+  - **Gemini AI Title Parsing** — Optional integration with Google Gemini AI API to extract perfect titles and episode numbers from extremely messy, abbreviated, or non-standard video filenames that standard parsers fail on.
+  - **Smart Title Parsing** — Built-in `GuessIt` engine strips scene tags (`1080p`, `x264`, `BluRay`) to display clean titles like *The Matrix (1999)* or *One Piece Episode 1168*.
+  - **Universal Out-of-the-Box** — Uses the official VLC Discord application ID. No need to create Discord developer apps or set up client IDs.
+</details>
 
-### 📺 AniList Integration
-- **Secure OAuth 2.0** — Full Authorization Code Flow with a local callback server. Your credentials never leave your machine.
-- **Auto Episode Sync** — Automatically updates your AniList progress when you cross a configurable watch threshold (default: 80%).
-- **Auto-Score Popups** — Automatically prompts you to rate a series the moment you finish the final episode, matched to your AniList preference format.
-- **AniSkip Integration** — Automatically skips Openings (OP) and Endings (ED) if you're watching the correct episode based on AniList data.
-- **Smart Matching** — 2-tier search: checks your active AniList list first, then falls back to global database search with format validation.
-- **Real-time AniList Logs** — Dedicated in-app log panel shows every sync decision with color-coded entries for debugging.
-
-### 📊 Dashboard & Tracking
-- **Modern WebView UI** — Beautiful glassmorphism design with ambient glow effects, 3D hover animations, and built with the Outfit font family.
-- **macOS-Style Toasts** — Elegant, animated dark-mode toast notifications for app events!
-- **Custom Accent Themes** — Choose from a variety of modern UI accent themes in Preferences to match your aesthetic (Discord Blurple, Ruby Red, Emerald Green, Neon Purple, etc).
-- **Anime Wrapped (Analytics)** — Generate and download a beautiful image of your "Anime Wrap" directly from the Analytics tab to share with your friends. Features deep stats like Average Session Length, Most Binge-Watched Day, and Total Hours!
-- **Live Discord Preview & Toggle** — See exactly how your rich presence will look on Discord inside the app in real-time. Instantly toggle your Discord Activity ON/OFF directly from the Dashboard with a single click.
-- **Interactive Developer Console** — Built-in terminal drawer that streams internal backend logs and RPC events in real-time for easy debugging.
-- **System Tray & Registry Startup** — Minimizes to tray and uses a clean, silent Windows Registry injection for automatic booting on PC startup without flashing console windows. Less than 50MB RAM footprint.
-- **Low-End CPU Hibernation** — Automatically enters a 12-second idle poll when VLC is closed, conserving resources.
-
----
-
-## 🚀 Installation
-
-### Option 1: Quick Installer (Recommended)
-1. Go to the [**Latest Release**](https://github.com/DulinNethmira/VLC-RPC/releases/latest).
-2. Download **`VLC RPC Setup.exe`**.
-3. Run the installer — it creates a desktop shortcut and configures everything automatically.
-
-### Option 2: Run from Source
-```bash
-git clone https://github.com/DulinNethmira/VLC-RPC.git
-cd VLC-RPC
-pip install -r requirements.txt
-python vlc_discord_rpc_gui.py
-```
+<details open>
+  <summary><b>📡 Rich Discord Presence</b></summary>
+  <br>
+  
+  - **Live Scene Snapshots** — Takes a live frame capture from your local video (Anime/Movies) using FFmpeg and uploads it to display as the rich presence cover art instead of generic posters.
+  - **Media Artwork** — Fetches high-quality posters from OMDb, Jikan (MyAnimeList), TVmaze, iTunes, and Wikipedia (when Snapshots are disabled).
+  - **Interactive Buttons** — Adds clickable AniList/IMDb links directly on your Discord profile when available.
+</details>
 
 ---
 
-## ⚙️ VLC Setup (Required)
+## 🚀 Quick Start Guide
 
-For the tool to read your media data, enable the VLC Web Interface:
+<details>
+  <summary><b>Option 1: Quick Installer (Recommended)</b></summary>
+  <br>
+  
+  1. Go to the <a href="https://github.com/DulinNethmira/VLC-RPC/releases/latest"><b>Latest Release</b></a>.
+  2. Download <b><code>VLC RPC Setup.exe</code></b>.
+  3. Run the installer — it creates a desktop shortcut and configures everything automatically.
+</details>
 
-1. Open **VLC Media Player**.
-2. Go to **Tools** > **Preferences** (or press `Ctrl+P`).
-3. At the bottom left, under **Show settings**, select **All**.
-4. Navigate to **Interface** > **Main interfaces** and check the **Web** checkbox.
-5. Expand **Main interfaces**, click **Lua**, and under *Lua HTTP*, set a **Password** (e.g., `1234`).
-6. Click **Save** and **restart VLC**.
-7. Open the VLC RPC Dashboard, go to **Preferences**, and enter that same password.
-
----
-
-## 📺 AniList Setup
-
-To enable automatic anime episode syncing:
-
-1. Go to [AniList Developer Settings](https://anilist.co/settings/developer) and create a new API v2 Client.
-2. Set the **Redirect URI** to `http://localhost:8899`.
-3. Copy your **Client ID** and **Client Secret**.
-4. In the VLC RPC Dashboard, go to **Integrations** and paste both values.
-5. Click **Connect AniList Account** — a browser window opens for you to authorize.
-6. Once connected, the button turns green. Your anime progress will sync automatically!
-
-> **Tip:** Open the **AniList Logs** tab in the sidebar to watch the sync engine in real-time.
+<details>
+  <summary><b>Option 2: Run from Source</b></summary>
+  <br>
+  
+  ```bash
+  git clone https://github.com/DulinNethmira/VLC-RPC.git
+  cd VLC-RPC
+  pip install -r requirements.txt
+  python vlc_discord_rpc_gui.py
+  ```
+</details>
 
 ---
 
-## 🛠️ Building the Installer
+## ⚙️ Integrations Setup
 
-To compile from source into a standalone Windows installer:
+<details>
+  <summary><b>VLC Media Player Setup (Required)</b></summary>
+  <br>
+  
+  For the tool to read your media data, enable the VLC Web Interface:
+  1. Open **VLC Media Player**.
+  2. Go to **Tools** > **Preferences** (or press `Ctrl+P`).
+  3. At the bottom left, under **Show settings**, select **All**.
+  4. Navigate to **Interface** > **Main interfaces** and check the **Web** checkbox.
+  5. Expand **Main interfaces**, click **Lua**, and under *Lua HTTP*, set a **Password** (e.g., `1234`).
+  6. Click **Save** and **restart VLC**.
+  7. Open the VLC RPC Dashboard, go to **Preferences**, and enter that same password.
+</details>
 
-1. Build the executable with PyInstaller:
-   ```bash
-   pyinstaller --noconfirm --name "VLC RPC" --onedir --windowed --icon "web/icon.ico" --add-data "web;web" --collect-data babelfish --collect-data guessit "vlc_discord_rpc_gui.py"
-   ```
-2. Compile `setup.iss` with [**Inno Setup 6**](https://jrsoftware.org/isdl.php) to generate the final setup executable.
+<details>
+  <summary><b>AniList Setup (Optional)</b></summary>
+  <br>
+  
+  To enable automatic anime episode syncing:
+  1. Go to <a href="https://anilist.co/settings/developer">AniList Developer Settings</a> and create a new API v2 Client.
+  2. Set the **Redirect URI** to `http://localhost:8899`.
+  3. Copy your **Client ID** and **Client Secret**.
+  4. In the VLC RPC Dashboard, go to **Integrations** and paste both values.
+  5. Click **Connect AniList Account** — a browser window opens for you to authorize.
+  6. Once connected, the button turns green. Your anime progress will sync automatically!
+</details>
 
 ---
 
-## 🏗️ Tech Stack
-
-| Component | Technology |
-|---|---|
-| Backend | Python 3.10, `requests`, `guessit`, `pypresence` |
-| UI Framework | `pywebview` (Chromium-based WebView) |
-| Frontend | HTML/CSS/JS with Outfit font, Font Awesome icons |
-| Database | SQLite (watch history) |
-| APIs | AniList GraphQL, OMDb, Jikan, TVmaze, iTunes, Wikipedia |
-| Installer | PyInstaller + Inno Setup 6 |
-
----
-
-## 📜 License
-
-This project is open-source and available under the [MIT License](LICENSE).
+<div align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:6366f1,100:8b5cf6&height=100&section=footer" width="100%" />
+</div>
