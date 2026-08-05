@@ -57,31 +57,16 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v4.9.3"
+    tag_name = "v4.9.6"
     
-    release_title = "✨ v4.9.3 - Smart Title Recognition & Cover Image Fixes"
-    release_notes = """### 🚀 What's New in v4.9.3!
+    release_title = "🔄 v4.9.6 - Discord Widget Auto-Sync Fix"
+    release_notes = """### 🚀 What's New in v4.9.6!
 
-A focused quality-of-life update that fixes some frustrating edge cases you've been reporting.
+#### 🐛 The Fixes
+- **Discord Profile Widget Auto-Sync**: Fixed a bug where the Discord Profile Widget (both v1 and v2) would only sync once when you first connected it, and would get stuck on old episode counts (e.g., stuck on 3967 episodes) even after watching new shows. 
+- The app now automatically syncs your fresh AniList stats to your Discord profile **every time you start the app**, and immediately attempts a sync **every time you finish watching an episode**!
 
-#### 🔍 Title Recognition — Now Smarter Than Ever
-- **Fixed Bracket Subtitles**: Filenames like `Fate Stay Night [Heaven's Feel] II. lost butterfly.mkv` now correctly extract `Heaven's Feel` as part of the title instead of treating it as a release group (which previously caused misidentification).
-- **Fixed Subtitle Capitalization**: Words like `II`, `OVA`, `TV` and other ALL-CAPS abbreviations are now preserved correctly. No more `Ii Lost Butterfly`!
-- **Fixed SubsPlease Misparse**: Files tagged as `[SubsPlease]` or other release groups no longer get confused with subtitle text. The parser now correctly distinguishes single-word tags from prose subtitles.
-- **Semicolon Filenames**: Movies with semicolons like `Tears of the Azure Sea; Chapter 2.mkv` continue to be parsed correctly (no stack overflow).
-
-#### 🖼️ Cover Image Fixes
-- **Snapshot Persistence Bug Fixed**: The scene snapshot from the previous video no longer lingers on-screen when switching to a new file. It's now properly cleared the moment playback changes.
-- **Cover Image Data Cleared on Switch**: All associated image data is reset when a new media file starts, ensuring you always see the correct artwork.
-
-#### 🔗 AniList Sync (Inherited from v4.9.2)
-- Cross-title false matches (e.g., *Polar Opposites* syncing to *One Piece*) remain fully fixed.
-
-### 🔧 Under the Hood
-- Bracket processing now runs before camelCase splitting to prevent release group name corruption.
-- Smart title-casing function added to handle all-uppercase words correctly.
-
-Enjoy the cleaner experience! 🎉
+Your Discord profile will now always stay up-to-date with your true AniList statistics! 🎉
 """
 
     try:
