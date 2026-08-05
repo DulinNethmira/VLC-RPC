@@ -57,7 +57,7 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v4.9.8"
+    tag_name = "v4.9.9"
     
     release_title = "✨ v4.9.8 - Massive Feature Update: Analytics & Themes!"
     release_notes = """### 🚀 What's New in v4.9.8!

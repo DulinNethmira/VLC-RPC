@@ -237,8 +237,7 @@ window.applyTheme = function(color) {
     let r = parseInt(color.slice(1, 3), 16),
         g = parseInt(color.slice(3, 5), 16),
         b = parseInt(color.slice(5, 7), 16);
-    document.documentElement.style.setProperty('--glow-color', 
-gba(\, \, \, 0.4));
+    document.documentElement.style.setProperty('--glow-color', `rgba(${r}, ${g}, ${b}, 0.4)`);
 
     if (weeklyBarChart) {
         weeklyBarChart.data.datasets[0].backgroundColor = color;
