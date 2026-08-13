@@ -217,7 +217,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.0.0"
+CURRENT_VERSION = "5.1.0"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -293,993 +293,221 @@ DEFAULT_CONFIG = {
 
 
 def query_gemini_title(filename, api_key):
-
-
     """Use Gemini REST API to get the exact official anime/media title and episode."""
-
-
-    if not api_key: return None, None, None
-
-
+    if not api_key: return None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
-
-
-    prompt = f"""
-
-
+    
+    prompt = """
 You are an expert media metadata resolver with internet knowledge.
-
-
-
-
 
 Your task is to identify the ORIGINAL OFFICIAL TITLE of the media represented by the filename.
 
-
-
-
-
-The filename may contain:
-
-
-- Scene release names
-
-
-- Fansub group names
-
-
-- Release tags
-
-
-- Codec names
-
-
-- Resolution
-
-
-- Audio formats
-
-
-- CRC hashes
-
-
-- Random punctuation
-
-
-- Underscores
-
-
-- Dots
-
-
-- Missing punctuation
-
-
-- Incorrect capitalization
-
-
-- Abbreviations
-
-
-- Romanized Japanese titles
-
-
-- English titles
-
-
-- Season/Episode notation
-
-
-
-
-
-Your job is to reconstruct the OFFICIAL TITLE exactly as it appears on official sources (AniList, MyAnimeList, TMDB, IMDb, Spotify, Apple Music, etc.).
-
-
-
-
+The filename may contain scene release names, fansub groups, resolutions, CRC hashes, roman numerals, and season/episode notation.
+Your job is to reconstruct the OFFICIAL TITLE exactly as it appears on official sources (AniList, MyAnimeList, TMDB, IMDb).
 
 Rules:
-
-
-
-
-
-1. Preserve ALL official punctuation.
-
-
-Examples:
-
-
-- Re:ZERO -Starting Life in Another World-
-
-
-- KONO SUBARASHII SEKAI NI SYUKUFUKU WO!
-
-
-- SPYÃ—FAMILY
-
-
-- Steins;Gate
-
-
-- Fate/stay night
-
-
-- Dr. STONE
-
-
-- Oshi no Ko
-
-
-- Is It Wrong to Try to Pick Up Girls in a Dungeon?
-
-
-
-
-
-2. Correct missing punctuation.
-
-
-Example:
-
-
-ReZERO
-
-
-→ Re:ZERO
-
-
-
-
-
-3. Restore official capitalization.
-
-
-
-
-
-4. Ignore completely:
-
-
-- Resolution
-
-
-- Codec
-
-
-- Source
-
-
-- Fansub group
-
-
-- Release group
-
-
-- CRC
-
-
-- Language tags
-
-
-- Bit depth
-
-
-- File extension
-
-
-
-
-
-5. Detect:
-
-
-- Anime
-
-
-- Movies
-
-
-- TV Shows
-
-
-- OVAs
-
-
-- Specials
-
-
-- Music Videos
-
-
-- Songs
-
-
-- Albums (when applicable)
-
-
-
-
-
-6. Extract:
-
-
-- Season number if present
-
-
-- Episode number if present
-
-
-- Movie number if applicable
-
-
-
-
-
-7. Never invent a title.
-
-
-If uncertain, return the cleaned best match.
-
-
-
-
-
-8. Search your knowledge to find the official title even if the filename is incomplete or poorly formatted.
-
-
-
-
+1. Preserve ALL official punctuation and subtitles (e.g. "Re:ZERO -Starting Life in Another World-").
+2. NEVER REMOVE SEQUEL / INSTALLMENT MARKERS. Preserve sequel numbers, Roman numeral installment markers, and season-identifying words when they are part of the official title.
+3. Do not reduce sequels to the franchise/base title. (e.g. "Overlord II" must remain "Overlord II", not "Overlord").
+4. Treat Roman numerals like "I", "II", "III" as meaningful title components, especially in anime. DO NOT interpret them as episode numbers.
+5. If a season or movie number is part of the title, preserve it in the "title" field, BUT ALSO populate the "base_title" and "season" fields.
+6. Ignore completely: Resolution, Codec, Fansub/Release group, CRC, File extension.
 
 Examples
 
+Input:
+Overlord II E10.mkv
 
-
-
+Output:
+{
+  "title": "Overlord II",
+  "base_title": "Overlord",
+  "season": 2,
+  "episode": 10,
+  "media_type": "anime"
+}
 
 Input:
-
-
 ReZERO - Starting Life in Another World Season 2 E08
 
-
-
-
-
 Output:
-
-
-{{
-
-
-  "title": "Re:ZERO - Starting Life in Another World",
-
-
+{
+  "title": "Re:ZERO -Starting Life in Another World- 2nd Season",
+  "base_title": "Re:ZERO -Starting Life in Another World-",
   "season": 2,
-
-
   "episode": 8,
-
-
   "media_type": "anime"
-
-
-}}
-
-
-
-
+}
 
 Input:
-
-
 SPY FAMILY S01E05
 
-
-
-
-
 Output:
-
-
-{{
-
-
-  "title": "SPYÃ—FAMILY",
-
-
+{
+  "title": "SPY×FAMILY",
+  "base_title": "SPY×FAMILY",
   "season": 1,
-
-
   "episode": 5,
-
-
   "media_type": "anime"
-
-
-}}
-
-
-
-
+}
 
 Input:
-
-
-Steins Gate 01
-
-
-
-
+Fate Stay Night [Heaven's Feel] II. lost butterfly.mkv
 
 Output:
-
-
-{{
-
-
-  "title": "Steins;Gate",
-
-
+{
+  "title": "Fate/stay night [Heaven's Feel] II. lost butterfly",
+  "base_title": "Fate/stay night",
   "season": null,
-
-
-  "episode": 1,
-
-
-  "media_type": "anime"
-
-
-}}
-
-
-
-
-
-Input:
-
-
-Dr Stone S03E02
-
-
-
-
-
-Output:
-
-
-{{
-
-
-  "title": "Dr. STONE",
-
-
-  "season": 3,
-
-
-  "episode": 2,
-
-
-  "media_type": "anime"
-
-
-}}
-
-
-
-
-
-Input:
-
-
-Kimi no Na wa 2016 1080p BluRay
-
-
-
-
-
-Output:
-
-
-{{
-
-
-  "title": "Your Name.",
-
-
-  "season": null,
-
-
   "episode": null,
-
-
   "media_type": "movie"
-
-
-}}
-
-
-
-
-
-Input:
-
-
-Shape of You.mp3
-
-
-
-
-
-Output:
-
-
-{{
-
-
-  "title": "Shape of You",
-
-
-  "season": null,
-
-
-  "episode": null,
-
-
-  "media_type": "song"
-
-
-}}
-
-
-
-
+}
 
 Return ONLY valid JSON in this exact format:
 
-
-
-
-
-{{
-
-
+{
   "title": "...",
-
-
+  "base_title": "...",
   "season": <number or null>,
-
-
   "episode": <number or null>,
-
-
-  "media_type": "anime|movie|tv|song|ova|special|music_video|unknown"
-
-
-}}
-
-
-
-
+  "media_type": "anime|movie|tv_show|song|music|unknown"
+}
 
 Filename:
-
-
 {filename}
-
-
 """
-
-
+    prompt = prompt.replace('{filename}', filename)
+    
     def _parse_response(text):
-
-
         if text.startswith("```"):
-
-
             text = text.strip("`").strip()
-
-
             if text.lower().startswith("json"):
-
-
                 text = text[4:].strip()
-
-
         parsed = json.loads(text)
-
-
-        title = parsed.get("title")
-
-
-        season = parsed.get("season")
-
-
-        ep = parsed.get("episode")
-
-
-        media_type_ai = parsed.get("media_type", "")  # e.g. anime, movie, tv, song
-
-
-        if season and ep:
-
-
-            ep_str = f"Season {season} Episode {ep}"
-
-
-        elif ep:
-
-
-            ep_str = f"Episode {ep}"
-
-
-        else:
-
-
-            ep_str = ""
-
-
-        return title, ep_str, media_type_ai
-
-
-
-
-
-    # No grounding tool — the model has built-in knowledge of official titles
-
+        return parsed
 
     payload = {
-
-
         "contents": [{"parts": [{"text": prompt}]}],
-
-
         "generationConfig": {"response_mime_type": "application/json"}
-
-
     }
-
-
     try:
-
-
+        import requests
         r = requests.post(url, json=payload, timeout=15)
-
-
         if r.status_code == 200:
-
-
             text = r.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-
-
             return _parse_response(text)
-
-
     except Exception as e:
-
-
         pass
+    return None
 
-
-    return None, None, None
 
 
 
 
 
 def clean_title(title):
-
-
-    """Parse a raw filename into (display_title, episode_str).
-
-
-    Works for both anime/TV  (S01E04, Episode 4) and movies
-
-
-    (American.Sniper.2014.720p.BluRay…)."""
-
-
+    """Parse a raw filename into structured media identity data."""
+    import re
+    import guessit
     title = str(title or "")
-
-
     title = re.sub(r'^\d+[\.\-]\s+', '', title)
-
-
     title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
-
-
     title = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
-
-
     
-
-
-    # Step 1: Process [brackets] FIRST before un-camelcasing.
-
-
-    # This converts subtitle-style brackets like [Heaven's Feel] to ': Heaven\'s Feel'
-
-
-    # so guessit treats it as part of the title, not a release group.
-
-
-    # Must run BEFORE un-camelcase to keep [SubsPlease] as one word.
-
-
     def _bracket_to_subtitle(m):
-
-
         c = m.group(1).strip()
-
-
-        # Real release tags: single word, no spaces or apostrophes
-
-
         if ' ' not in c and "'" not in c and re.match(r'^[\w\-\.]+$', c):
-
-
-            return m.group(0)  # keep: e.g. [SubsPlease], [1080p]
-
-
-        return ': ' + c        # subtitle: e.g. [Heaven's Feel]
-
-
+            return m.group(0)
+        return ': ' + c
     title = re.sub(r'\[([^\]]+)\]', _bracket_to_subtitle, title)
 
-
-
-
-
-    # Step 2: Un-camelcase words for messy filenames (e.g., "ReZero" -> "Re Zero")
-
-
     title = re.sub(r'([a-z])([A-Z])', r'\1 \2', title)
-
-
-
-
-
-    # Convert semicolons to colons to prevent guessit stack overflows and preserve subtitle structure
-
-
     title = title.replace(';', ':')
 
+    def _smart_cap(w):
+        if not w: return w
+        if w.isupper() and len(w) <= 5: return w
+        def cap_part(p):
+            if not p: return p
+            if any(c.isupper() for c in p[1:]): return p
+            return p.capitalize()
+        return '-'.join(cap_part(p) for p in w.split('-'))
 
+    def _apply_smart_cap(t):
+        if not t: return t
+        return ' '.join(_smart_cap(w) for w in str(t).split())
 
-
+    result = {
+        "title": title,
+        "base_title": "",
+        "season": None,
+        "episode": None,
+        "media_type": ""
+    }
 
     loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\.\-:&!,]+?)[\s\._]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
-
-
+    explicit_ep = re.search(r'\b(?:Episode|Ep|E)\s*\d{1,4}\s*$', title, re.I)
+    
+    raw_title_for_guessit = title
     if loose_ep:
-
-
         ep_num = int(loose_ep.group(2))
-
-
-        explicit_ep = re.search(r'\b(?:Episode|Ep|E)\s*\d{1,4}\s*$', title, re.I)
-
-
         if explicit_ep or not (1900 <= ep_num <= 2099):
-
-
-            # Only strip dots/underscores — preserve hyphens so compound words
-
-
-            # (Thousand-Year) and subtitle separators ( - The Calamity) survive.
-
-
-            cleaned = re.sub(r'[\._ ]+', ' ', loose_ep.group(1)).strip()
-
-
-            # Strip any trailing dashes/spaces left by the separator before the episode number
-
-
-            cleaned = re.sub(r'[\s\-]+$', '', cleaned).strip()
-
-
-            # Smart title-case: capitalise each word but keep letters after hyphens
-
-
-            def _title_word(w):
-
-
-                # Handle hyphenated words like 'thousand-year' → 'Thousand-Year'
-
-
-                return '-'.join(p.capitalize() for p in w.split('-'))
-
-
-            return ' '.join(_title_word(w) for w in cleaned.split()), f"Episode {ep_num}"
-
-
-
-
-
-    if guessit:
-
-
-        try:
-
-
-            guessed = guessit.guessit(title)
-
-
-            cleaned = guessed.get('title', title)
-
-
-            episode_str = ""
-
-
-            media_type = guessed.get('type', '')
-
-
-
-
-
-            if media_type == 'movie':
-
-
-                year = guessed.get('year')
-
-
-                if year:
-
-
-                    cleaned = f"{cleaned} ({year})"
-
-
-                    episode_str = f"Movie ({year})"
-
-
-                else:
-
-
-                    episode_str = "Movie"
-
-
-            elif media_type == 'episode':
-
-
-                season = guessed.get('season')
-
-
-                episode = guessed.get('episode')
-
-
-                if season and episode:
-
-
-                    if isinstance(season, list): season = season[0]
-
-
-                    if isinstance(episode, list): episode = episode[0]
-
-
-                    episode_str = f"Season {season} Episode {episode}"
-
-
-                elif episode:
-
-
-                    if isinstance(episode, list): episode = episode[0]
-
-
-                    episode_str = f"Episode {episode}"
-
-
-
-
-
-            # If guessit put a subtitle like [Heaven's Feel] in release_group, reattach it.
-
-
-            # Real groups (SubsPlease, YIFY) have no spaces/apostrophes.
-
-
-            release_group = guessed.get('release_group')
-
-
-            if release_group and isinstance(release_group, str):
-
-
-                rg = release_group.strip()
-
-
-                if ("'" in rg or " " in rg) and len(rg) > 3 and cleaned and rg.lower() not in cleaned.lower():
-
-
-                    cleaned = cleaned + ": " + rg
-
-
-
-
-
-            # Also check alternative_title
-
-
-            alt_title = guessed.get('alternative_title')
-
-
-            if alt_title and isinstance(alt_title, str) and cleaned:
-
-
+            raw_title = re.sub(r'[\._ ]+', ' ', loose_ep.group(1)).strip()
+            raw_title = re.sub(r'[\s\-]+$', '', raw_title).strip()
+            result["episode"] = ep_num
+            raw_title_for_guessit = raw_title
+
+    try:
+        guessed = guessit.guessit(raw_title_for_guessit)
+        cleaned = guessed.get('title', raw_title_for_guessit)
+        media_type = guessed.get('type', '')
+        
+        if media_type == 'movie':
+            year = guessed.get('year')
+            if year:
+                cleaned = f"{cleaned} ({year})"
+        
+        release_group = guessed.get('release_group')
+        if release_group and isinstance(release_group, str):
+            rg = release_group.strip()
+            if ("'" in rg or " " in rg) and len(rg) > 3 and cleaned and rg.lower() not in cleaned.lower():
+                cleaned = cleaned + ": " + rg
+                
+        alt_title = guessed.get('alternative_title')
+        if alt_title:
+            if isinstance(alt_title, list):
+                alt_title = ' '.join(alt_title)
+            if isinstance(alt_title, str) and cleaned:
                 at = alt_title.strip()
-
-
                 if at and at.lower() not in cleaned.lower():
-
-
                     cleaned = cleaned + " " + at
+                
+        cleaned = _apply_smart_cap(cleaned)
+        
+        season = guessed.get('season')
+        episode = guessed.get('episode')
+        
+        if isinstance(season, list): season = season[0]
+        if isinstance(episode, list): episode = episode[0]
+        
+        result["title"] = cleaned
+        if season: result["season"] = season
+        
+        if episode is not None:
+            if result["episode"] is not None:
+                if str(season) + str(episode) == str(result["episode"]):
+                    result["season"] = None
+                else:
+                    result["episode"] = episode
+            else:
+                result["episode"] = episode
+                
+        result["media_type"] = media_type if media_type else ""
+    except Exception as e:
+        pass
+
+    return result
 
-
-
-
-
-            # Smart title-case: preserve ALL-CAPS acronyms (II stays II, not Ii)
-
-
-            def _smart_cap(w):
-
-
-                if not w: return w
-
-
-                if w.isupper() and len(w) <= 5: return w
-
-
-                return '-'.join(p.capitalize() for p in w.split('-'))
-
-
-            if cleaned and isinstance(cleaned, str):
-
-
-                cleaned = ' '.join(_smart_cap(w) for w in str(cleaned).split())
-
-
-
-
-
-            return str(cleaned), episode_str
-
-
-        except Exception:
-
-
-            pass
-
-
-
-
-
-    # --- Regex fallback ---
-
-
-    title = re.sub(r'\[[^\]]*\]', '', title)
-
-
-    title = re.sub(r'\([^\)]*\)', '', title)
-
-
-
-
-
-    episode_str = ""
-
-
-    # TV season/episode
-
-
-    se_match = re.search(r'\bS(\d+)\s*E(\d+)\b', title, re.IGNORECASE)
-
-
-    if se_match:
-
-
-        episode_str = f"Season {int(se_match.group(1))} Episode {int(se_match.group(2))}"
-
-
-        title = re.sub(r'\bS\d+\s*E\d+\b', '', title, flags=re.IGNORECASE)
-
-
-    elif re.search(r'\b(?:Episode|Ep)\s*(\d+)\b', title, re.IGNORECASE):
-
-
-        ep_match = re.search(r'\b(?:Episode|Ep)\s*(\d+)\b', title, re.IGNORECASE)
-
-
-        episode_str = f"Episode {int(ep_match.group(1))}"
-
-
-        title = re.sub(r'\b(?:Episode|Ep)\s*\d+\b', '', title, flags=re.IGNORECASE)
-
-
-    elif re.search(r'-\s*(\d+)\b', title):
-
-
-        dash_match = re.search(r'-\s*(\d+)\b', title)
-
-
-        episode_str = f"Episode {int(dash_match.group(1))}"
-
-
-        title = re.sub(r'-\s*\d+\b', '', title)
-
-
-
-
-
-    # Movie year detection (regex fallback)
-
-
-    year_match = re.search(r'\b(19|20)\d{2}\b', title)
-
-
-    if year_match and not episode_str:
-
-
-        episode_str = f"Movie ({year_match.group()})"
-
-
-
-
-
-    words_to_remove = [
-
-
-        r'\b1080p\b', r'\b720p\b', r'\b480p\b', r'\b2160p\b', r'\b4k\b',
-
-
-        r'\bbluray\b', r'\bwebrip\b', r'\bweb-dl\b', r'\bdvdrip\b',
-
-
-        r'\bx264\b', r'\bx265\b', r'\bh264\b', r'\bhevc\b',
-
-
-        r'\bdual[- ]audio\b', r'\bmulti\b', r'\beng\b', r'\bsub\b', r'\bdub\b',
-
-
-        r'\byify\b', r'\bxvid\b', r'\baac\b', r'\byts\b', r'\b\[yts\.mx\]\b',
-
-
-        r'\brepack\b', r'\bextended\b'
-
-
-
-
-
-    ]
-
-
-
-
-
-    for word in words_to_remove:
-
-
-
-
-
-        title = re.sub(word, '', title, flags=re.IGNORECASE)
-
-
-
-
-
-
-
-
-
-
-
-    title = re.sub(r'[\s\.\-_]+', ' ', title).strip()
-
-
-
-
-
-    return title, episode_str
 
 
 
