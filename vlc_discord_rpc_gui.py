@@ -217,7 +217,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.1.1"
+CURRENT_VERSION = "5.1.2"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -401,8 +401,32 @@ Filename:
     return None
 
 
+def media_identity_to_display(identity):
+    """Convert the structured title-parser result into the worker's display fields."""
+    if not isinstance(identity, dict):
+        return "", "", ""
 
+    title = str(identity.get("title") or "").strip()
+    media_type = str(identity.get("media_type") or "").strip()
 
+    def _number(value):
+        try:
+            return str(int(value))
+        except (TypeError, ValueError):
+            return ""
+
+    season = _number(identity.get("season"))
+    episode = _number(identity.get("episode"))
+    if season and episode:
+        episode_str = f"Season {season} Episode {episode}"
+    elif episode:
+        episode_str = f"Episode {episode}"
+    elif season:
+        episode_str = f"Season {season}"
+    else:
+        episode_str = ""
+
+    return title, episode_str, media_type
 
 
 def clean_title(title):
@@ -4757,7 +4781,7 @@ class RPCBackend:
                             def _run_gemini(name, key):
 
 
-                                t, e, mt = query_gemini_title(name, key)
+                                t, e, mt = media_identity_to_display(query_gemini_title(name, key))
 
 
                                 if t:
@@ -4853,7 +4877,7 @@ class RPCBackend:
                     if not cleaned_title:
 
 
-                        cleaned_title, episode_str = clean_title(raw_name)
+                        cleaned_title, episode_str, _ = media_identity_to_display(clean_title(raw_name))
 
 
 
@@ -4862,7 +4886,7 @@ class RPCBackend:
                     if tag_title and not episode_str:
 
 
-                        alt_title, alt_episode = clean_title(tag_title)
+                        alt_title, alt_episode, _ = media_identity_to_display(clean_title(tag_title))
 
 
                         if alt_episode:
@@ -8091,5 +8115,3 @@ if __name__ == '__main__':
 
 
     os._exit(0)
-
-
