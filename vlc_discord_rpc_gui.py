@@ -37,6 +37,12 @@ import urllib.parse
 import hashlib
 
 
+import unicodedata
+
+
+from difflib import SequenceMatcher
+
+
 import requests
 
 
@@ -208,6 +214,15 @@ CONFIG_FILE = "config.json"
 CACHE_FILE = "metadata_cache.json"
 
 
+ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
+
+
+ANILIST_IDENTITY_VERSION = 1
+
+
+ANILIST_IDENTITY_CONFIDENCE = 95
+
+
 HISTORY_FILE = "history.json"
 
 
@@ -217,7 +232,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.1.2"
+CURRENT_VERSION = "5.2.0"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -795,7 +810,13 @@ class RPCBackend:
             "scene_snapshot_url": "",
 
 
-            "anilist_score_format": "POINT_100"
+            "anilist_score_format": "POINT_100",
+
+
+            "anilist_identity": None,
+
+
+            "anilist_identity_state": "UNKNOWN"
 
 
         }
@@ -805,6 +826,18 @@ class RPCBackend:
 
 
         self.scrobbled_episodes = set()
+
+
+        self.current_anilist_identity = None
+
+
+        self.anilist_identity_cache = {}
+
+
+        self._anilist_identity_resolving = set()
+
+
+        self._anilist_identity_lock = threading.Lock()
 
 
         self.anilist_username_cache = None   # None = not fetched yet; False = fetch failed
@@ -844,6 +877,15 @@ class RPCBackend:
 
 
         self.metadata_cache = self.load_metadata_cache()
+
+
+        cached_identities = self.metadata_cache.get(ANILIST_IDENTITY_CACHE_KEY, {})
+
+
+        if isinstance(cached_identities, dict):
+
+
+            self.anilist_identity_cache = cached_identities
 
 
         
@@ -1350,531 +1392,403 @@ class RPCBackend:
 
 
 
-    def sync_anilist(self, title, episode_num):
-
-
-        token = self.config.get("anilist_token")
-
-
-        if not token:
-
-
-            self.anilist_log("[Error] No AniList token — connect via Integrations tab.")
-
-
-            return False, "CURRENT"
-
-
-
-
-
-        headers = {
-
-
-            'Authorization': f'Bearer {token}',
-
-
-            'Content-Type': 'application/json',
-
-
-            'Accept': 'application/json'
-
-
-        }
-
-
-
-
-
-        def _gql(payload, timeout=10):
-
-
-            """POST GraphQL, handle 401 by clearing the bad token."""
-
-
-            r = requests.post('https://graphql.anilist.co', json=payload,
-
-
-                              headers=headers, timeout=timeout)
-
-
-            if r.status_code == 401:
-
-
-                self.config["anilist_token"] = ""
-
-
-                save_config(self.config)
-
-
-                self.anilist_log("[Error] Token expired/invalid. Cleared — reconnect via Integrations.")
-
-
-                raise PermissionError("AniList 401")
-
-
-            return r.json()
-
-
-
-
-
-        try:
-
-
-            # â”€â”€ Step 1a: Viewer ID â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
-            viewer_data = _gql({"query": "query { Viewer { id } }"})
-
-
-            viewer_id = (viewer_data.get("data") or {}).get("Viewer", {}).get("id")
-
-
-
-
-
-            # â”€â”€ Step 1a (fast path): use the anilistId we already fetched during metadata â”€
-
-
-            # This is the MOST reliable source — it was verified by a title-specific
-
-
-            # AniList search when the file first started playing.
-
-
-            media_id = None
-
-
-            total_episodes = None
-
-
-            cached_meta = self.state_data.get("metadata") or {}
-
-
-            if cached_meta.get("anilistId"):
-
-
-                media_id = cached_meta["anilistId"]
-
-
-                total_episodes = cached_meta.get("total_episodes")
-
-
-                self.anilist_log(f"[Fast] Using cached AniList ID {media_id} for '{title}'")
-
-
-
-
-
-            def _normalize(text):
-
-
-                if not text: return ""
-
-
-                return re.sub(r'[^\w\s]', ' ', text).strip().lower()
-
-
-
-
-
-            search_normalized = _normalize(re.sub(r'\s*\(\d{4}\)', '', title))
-
-
-
-
-
-            if viewer_id and not media_id:
-
-
-                list_q = """
-
-
-                query ($userId: Int) {
-
-
-                  MediaListCollection(userId: $userId, type: ANIME,
-
-
-                                      status_in: [CURRENT, PLANNING]) {
-
-
-                    lists { entries {
-
-
-                      media { id episodes title { romaji english } synonyms }
-
-
-                    }}
-
-
-                  }
-
-
-                }"""
-
-
-                lists_data = _gql({"query": list_q, "variables": {"userId": viewer_id}})
-
-
-
-
-
-                def _match(media):
-
-
-                    """Match only when the title is a strong, exact-word match.
-
-
-                    Avoids false positives like 'One Piece' matching 'Polar Opposites'."""
-
-
-                    cands = []
-
-
-                    t = media.get("title") or {}
-
-
-                    if t.get("english"): cands.append(_normalize(t["english"]))
-
-
-                    if t.get("romaji"):  cands.append(_normalize(t["romaji"]))
-
-
-                    for syn in (media.get("synonyms") or []):
-
-
-                        if syn:
-
-
-                            cands.append(_normalize(syn))
-
-
-                    # Only match if search_normalized is an exact match or very close.
-
-
-                    # We do NOT allow short candidates to be "contained in" the search
-
-
-                    # as that causes false positives (e.g. 'I' being in every title).
-
-
-                    for c in cands:
-
-
-                        if not c:
-
-
-                            continue
-
-
-                        # Exact match
-
-
-                        if search_normalized == c:
-
-
-                            return True
-
-
-                        # Allow minor variations: strip all non-alphanumeric and compare
-
-
-                        s_clean = re.sub(r'[^a-z0-9]', '', search_normalized)
-
-
-                        c_clean = re.sub(r'[^a-z0-9]', '', c)
-
-
-                        if s_clean and c_clean and s_clean == c_clean:
-
-
-                            return True
-
-
-                        # Allow if search starts with candidate (handles "Title Season 2" vs "Title")
-
-
-                        # but only if candidate is long enough (≥ 8 chars) to avoid short false matches
-
-
-                        if len(c_clean) >= 8 and c_clean and s_clean.startswith(c_clean):
-
-
-                            return True
-
-
-                    return False
-
-
-
-
-
-                mlc = (lists_data.get("data") or {}).get("MediaListCollection") or {}
-
-
-                for lst in mlc.get("lists", []):
-
-
-                    for entry in lst.get("entries", []):
-
-
-                        m = entry.get("media", {})
-
-
-                        if _match(m):
-
-
-                            media_id = m["id"]
-
-
-                            total_episodes = m.get("episodes")
-
-
-                            self.anilist_log(f"[Found] '{title}' in your list -> ID {media_id}")
-
-
-                            break
-
-
-                    if media_id:
-
-
-                        break
-
-
-
-
-
-            # â”€â”€ Step 1c: Page search fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
-            if not media_id:
-
-
-                page_q = """
-
-
-                query ($search: String, $type: MediaType) {
-
-
-                  Page(perPage: 5) {
-
-
-                    media(search: $search, type: $type) {
-
-
-                      id episodes format
-
-
-                      title { romaji english native }
-
-
-                    }
-
-
-                  }
-
-
-                }"""
-
-
-                page_data = _gql({"query": page_q,
-
-
-                                   "variables": {"search": search_normalized, "type": "ANIME"}})
-
-
-                candidates = ((page_data.get("data") or {}).get("Page") or {}).get("media", [])
-
-
-                for m in candidates:
-
-
-                    t = m.get("title", {})
-
-
-                    found_title = _normalize(t.get("english") or t.get("romaji") or "")
-
-
-                    # CRITICAL: Only accept this candidate if its title actually resembles
-
-
-                    # our search. Never pick a result just because it's a TV format.
-
-
-                    s_clean = re.sub(r'[^a-z0-9]', '', search_normalized)
-
-
-                    f_clean = re.sub(r'[^a-z0-9]', '', found_title)
-
-
-                    if not s_clean or not f_clean:
-
-
-                        continue
-
-
-                    # Accept if result title starts with our search or vice versa (min 8 chars)
-
-
-                    title_match = (s_clean == f_clean or
-
-
-                                   (len(s_clean) >= 8 and f_clean.startswith(s_clean)) or
-
-
-                                   (len(f_clean) >= 8 and s_clean.startswith(f_clean)))
-
-
-                    if title_match:
-
-
-                        media_id = m["id"]
-
-
-                        total_episodes = m.get("episodes")
-
-
-                        display = t.get("english") or t.get("romaji") or title
-
-
-                        self.anilist_log(f"[Global] Matched '{display}' -> ID {media_id}")
-
-
-                        break
-
-
-
-
-
-            if not media_id:
-
-
-                self.anilist_log(f"[Error] Could not resolve '{title}' to any AniList ID.")
-
-
-                return False, "CURRENT"
-
-
-
-
-
-            # â”€â”€ Step 2: Status logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
-            new_status = "COMPLETED" \
-                if (total_episodes and episode_num >= total_episodes) \
-                else "CURRENT"
-
-
-
-
-
-            # â”€â”€ Step 3: SaveMediaListEntry mutation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
-            mutation = """
-
-
-            mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus) {
-
-
-              SaveMediaListEntry(mediaId: $mediaId, progress: $progress,
-
-
-                                 status: $status) {
-
-
-                id progress status
-
-
-              }
-
-
-            }"""
-
-
-            result = _gql({"query": mutation,
-
-
-                            "variables": {"mediaId": media_id,
-
-
-                                          "progress": episode_num,
-
-
-                                          "status": new_status}})
-
-
-            entry = ((result.get("data") or {}).get("SaveMediaListEntry") or {})
-
-
-            if entry.get("id"):
-
-
-                emoji = "[OK]" if new_status == "CURRENT" else "[DONE]"
-
-
-                self.anilist_log(f"{emoji} Updated! '{title}' E{entry['progress']} -> {entry['status']}")
-
-
-                
-
-
-                # Trigger widget sync after successful update
-
-
-                threading.Thread(target=self.force_sync_widget, daemon=True).start()
-
-
-                threading.Thread(target=self.force_sync_widget_v2, daemon=True).start()
-
-
-                
-
-
-                return True, new_status
-
-
+    @staticmethod
+    def _normalize_anilist_title(value):
+        value = unicodedata.normalize("NFKD", str(value or ""))
+        value = "".join(ch for ch in value if not unicodedata.combining(ch))
+        return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+    @staticmethod
+    def _anilist_season_hint(title, episode_str=""):
+        source = f"{title or ''} {episode_str or ''}".lower()
+        patterns = (
+            r"\bseason\s*(\d{1,2})\b",
+            r"\bs(\d{1,2})e?\d*\b",
+            r"\b(\d{1,2})(?:st|nd|rd|th)\s+season\b",
+            r"\b(?:part|cour)\s*(\d{1,2})\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, source, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return 1
+
+
+    def _anilist_identity_key(self, title, episode_str=""):
+        normalized = self._normalize_anilist_title(title)
+        base = re.sub(
+            r"\b(?:season\s*\d+|\d+(?:st|nd|rd|th)\s+season|part\s*\d+|cour\s*\d+)\b",
+            " ",
+            normalized,
+        )
+        base = re.sub(r"\s+", " ", base).strip()
+        season = self._anilist_season_hint(title, episode_str)
+        return f"{base}|season:{season}", base, season
+
+
+    def _anilist_candidate_score(self, requested_title, episode_str, candidate):
+        """Return a conservative score for one AniList candidate.
+
+        A title similarity alone is never sufficient for a later season.  This
+        deliberately prefers an unresolved sync over a potentially wrong ID.
+        """
+        requested = self._normalize_anilist_title(requested_title)
+        _, requested_base, requested_season = self._anilist_identity_key(
+            requested_title, episode_str
+        )
+        if not requested:
+            return 0, "empty requested title"
+
+        title_data = candidate.get("title") or {}
+        variants = [
+            title_data.get("english"),
+            title_data.get("romaji"),
+            title_data.get("native"),
+            *(candidate.get("synonyms") or []),
+        ]
+        variants = [self._normalize_anilist_title(item) for item in variants if item]
+        if not variants:
+            return 0, "candidate has no titles"
+
+        score = 0
+        reason = "titles differ"
+        for variant in variants:
+            if variant == requested:
+                score = max(score, 100)
+                reason = "exact title"
             else:
+                _, variant_base, _ = self._anilist_identity_key(variant)
+                if requested_base and variant_base == requested_base:
+                    score = max(score, 88)
+                    reason = "exact base title"
+                elif len(requested) >= 8 and len(variant) >= 8:
+                    ratio = SequenceMatcher(None, requested, variant).ratio()
+                    if ratio >= 0.97:
+                        score = max(score, 84)
+                        reason = "near-exact title"
+
+        candidate_season = max(
+            self._anilist_season_hint(item) for item in variants
+        )
+        if requested_season > 1:
+            if candidate_season == requested_season:
+                score += 12
+                reason += ", season matches"
+            elif candidate_season > 1:
+                score -= 75
+                reason += ", different season"
+            else:
+                score -= 50
+                reason += ", candidate season is unspecified"
+        elif candidate_season > 1:
+            score -= 75
+            reason += ", candidate is a later season"
+
+        if candidate.get("type") != "ANIME":
+            return 0, "not an anime entry"
+        if candidate.get("format") == "MOVIE" and "episode" in str(episode_str).lower():
+            score -= 60
+            reason += ", movie/episode mismatch"
+        return max(0, min(score, 100)), reason
 
 
-                errors = result.get("errors", [])
+    def _apply_anilist_identity(self, identity):
+        self.current_anilist_identity = identity
+        self.state_data["anilist_identity"] = identity.copy()
+        self.state_data["anilist_identity_state"] = identity.get("state", "UNKNOWN")
 
 
-                err = errors[0].get("message", "Unknown") if errors else str(result)[:120]
+        # Retain the full provider metadata object. Only enrich its canonical ID
+        # after identity validation; covers, ratings, genres and descriptions are
+        # intentionally left untouched.
+        metadata = self.state_data.get("metadata")
+        if (
+            isinstance(metadata, dict)
+            and identity.get("state") == "SYNCABLE"
+            and identity.get("validated")
+        ):
+            metadata["anilistId"] = identity["anilist_id"]
+            if identity.get("episodes"):
+                metadata["total_episodes"] = identity["episodes"]
 
 
-                self.anilist_log(f"[Error] Mutation failed: {err}")
+    def _legacy_metadata_identity(self, identity_key, title):
+        """Lazily upgrade only exact-title legacy metadata records.
+
+        Older cache entries lack a confidence marker.  An ID is adopted only if
+        its stored official title is an exact normalized match, never by cache
+        key, containment, or result ordering.
+        """
+        normalized = self._normalize_anilist_title(title)
+        for metadata in self.metadata_cache.values():
+            if not isinstance(metadata, dict) or not metadata.get("anilistId"):
+                continue
+            official = self._normalize_anilist_title(
+                metadata.get("official_title") or metadata.get("title")
+            )
+            if not official or official != normalized:
+                continue
+            identity = {
+                "anilist_id": metadata["anilistId"],
+                "title": metadata.get("official_title") or title,
+                "title_romaji": metadata.get("title_romaji", ""),
+                "title_english": metadata.get("title_english", ""),
+                "title_native": metadata.get("title_native", ""),
+                "format": metadata.get("format", ""),
+                "season": metadata.get("season"),
+                "season_year": metadata.get("season_year"),
+                "episodes": metadata.get("total_episodes") or metadata.get("episodes"),
+                "media_type": "ANIME",
+                "source_key": identity_key,
+                "source_title": title,
+                "normalized_title": normalized,
+                "confidence": ANILIST_IDENTITY_CONFIDENCE / 100,
+                "resolved_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "identity_version": ANILIST_IDENTITY_VERSION,
+                "state": "SYNCABLE",
+                "validated": True,
+            }
+            self.anilist_identity_cache[identity_key] = identity.copy()
+            self.save_metadata_cache()
+            self.anilist_log(
+                f"[AniList] Upgraded exact legacy metadata to ID {identity['anilist_id']}."
+            )
+            return identity
+        return None
 
 
-                return False, new_status
+    def _resolve_anilist_identity(self, identity_key, title, episode_str):
+        """Resolve one series identity once; this never runs from a sync call."""
+        try:
+            self.anilist_log(f"[AniList] Resolving identity: {title}")
+            query = """
+            query ($search: String) {
+              Page(page: 1, perPage: 10) {
+                media(search: $search, type: ANIME) {
+                  id idMal type format status season seasonYear episodes duration
+                  title { romaji english native }
+                  synonyms
+                  relations { edges { relationType node { id type format season seasonYear episodes title { romaji english native } } } }
+                  coverImage { extraLarge large medium }
+                  bannerImage description(asHtml: false) genres averageScore meanScore
+                  startDate { year month day } endDate { year month day } siteUrl
+                }
+              }
+            }
+            """
+            response = requests.post(
+                "https://graphql.anilist.co",
+                json={"query": query, "variables": {"search": title}},
+                headers={"Content-Type": "application/json"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"AniList HTTP {response.status_code}")
+            payload = response.json()
+            if payload.get("errors"):
+                raise RuntimeError(payload["errors"][0].get("message", "AniList query failed"))
+            candidates = ((payload.get("data") or {}).get("Page") or {}).get("media") or []
+            scored = []
+            for candidate in candidates:
+                score, reason = self._anilist_candidate_score(title, episode_str, candidate)
+                if score:
+                    scored.append((score, reason, candidate))
+            scored.sort(key=lambda item: item[0], reverse=True)
+
+            if not scored or scored[0][0] < ANILIST_IDENTITY_CONFIDENCE:
+                identity = {
+                    "source_key": identity_key,
+                    "source_title": title,
+                    "normalized_title": self._normalize_anilist_title(title),
+                    "state": "UNRESOLVED",
+                    "validated": False,
+                    "confidence": scored[0][0] / 100 if scored else 0.0,
+                    "identity_version": ANILIST_IDENTITY_VERSION,
+                }
+                self.anilist_log("[AniList] Identity unresolved; sync skipped.")
+            elif len(scored) > 1 and scored[0][0] - scored[1][0] < 5:
+                identity = {
+                    "source_key": identity_key,
+                    "source_title": title,
+                    "normalized_title": self._normalize_anilist_title(title),
+                    "state": "AMBIGUOUS",
+                    "validated": False,
+                    "confidence": scored[0][0] / 100,
+                    "identity_version": ANILIST_IDENTITY_VERSION,
+                }
+                self.anilist_log("[AniList] Identity ambiguous; AniList progress not modified.")
+            else:
+                score, reason, media = scored[0]
+                titles = media.get("title") or {}
+                identity = {
+                    "anilist_id": media.get("id"),
+                    "title": titles.get("english") or titles.get("romaji") or title,
+                    "title_romaji": titles.get("romaji") or "",
+                    "title_english": titles.get("english") or "",
+                    "title_native": titles.get("native") or "",
+                    "format": media.get("format") or "",
+                    "season": media.get("season"),
+                    "season_year": media.get("seasonYear"),
+                    "episodes": media.get("episodes"),
+                    "media_type": media.get("type") or "ANIME",
+                    "source_key": identity_key,
+                    "source_title": title,
+                    "normalized_title": self._normalize_anilist_title(title),
+                    "confidence": score / 100,
+                    "resolved_at": datetime.datetime.utcnow().isoformat() + "Z",
+                    "identity_version": ANILIST_IDENTITY_VERSION,
+                    "state": "SYNCABLE",
+                    "validated": True,
+                }
+                with self._anilist_identity_lock:
+                    self.anilist_identity_cache[identity_key] = identity.copy()
+                    self.save_metadata_cache()
+                self.anilist_log(
+                    f"[AniList] Identity validated: ID {identity['anilist_id']} "
+                    f"({score}% - {reason})"
+                )
+
+            if (self.current_anilist_identity or {}).get("source_key") == identity_key:
+                self._apply_anilist_identity(identity)
+        except Exception as exc:
+            if (self.current_anilist_identity or {}).get("source_key") == identity_key:
+                identity = {
+                    "source_key": identity_key,
+                    "source_title": title,
+                    "normalized_title": self._normalize_anilist_title(title),
+                    "state": "API_ERROR",
+                    "validated": False,
+                    "confidence": 0.0,
+                    "identity_version": ANILIST_IDENTITY_VERSION,
+                }
+                self._apply_anilist_identity(identity)
+            self.anilist_log(f"[AniList] Identity API error: {exc}")
+        finally:
+            with self._anilist_identity_lock:
+                self._anilist_identity_resolving.discard(identity_key)
 
 
+    def ensure_anilist_identity(self, title, episode_str, is_music=False):
+        """Start identity resolution only for a new anime series/season context."""
+        if is_music or not title or not re.search(r"Episode\s*\d+", episode_str or "", re.IGNORECASE):
+            return
+        identity_key, _, _ = self._anilist_identity_key(title, episode_str)
+        current = self.current_anilist_identity or {}
+        if current.get("source_key") == identity_key:
+            return
+
+        with self._anilist_identity_lock:
+            cached = self.anilist_identity_cache.get(identity_key)
+            if (
+                isinstance(cached, dict)
+                and cached.get("identity_version") == ANILIST_IDENTITY_VERSION
+                and cached.get("validated")
+                and cached.get("confidence", 0) >= ANILIST_IDENTITY_CONFIDENCE / 100
+                and cached.get("anilist_id")
+            ):
+                identity = cached.copy()
+                identity["state"] = "SYNCABLE"
+                self._apply_anilist_identity(identity)
+                self.anilist_log(f"[AniList] Using cached AniList ID {identity['anilist_id']}.")
+                return
+            legacy_identity = self._legacy_metadata_identity(identity_key, title)
+            if legacy_identity:
+                self._apply_anilist_identity(legacy_identity)
+                return
+            if identity_key in self._anilist_identity_resolving:
+                return
+            self._anilist_identity_resolving.add(identity_key)
+
+        self._apply_anilist_identity({
+            "source_key": identity_key,
+            "source_title": title,
+            "normalized_title": self._normalize_anilist_title(title),
+            "state": "RESOLVING",
+            "validated": False,
+            "confidence": 0.0,
+            "identity_version": ANILIST_IDENTITY_VERSION,
+        })
+        threading.Thread(
+            target=self._resolve_anilist_identity,
+            args=(identity_key, title, episode_str),
+            daemon=True,
+        ).start()
 
 
-
-        except PermissionError:
-
-
+    def sync_anilist(self, title, episode_num):
+        """Sync only a verified current AniList identity; never title-search here."""
+        token = self.config.get("anilist_token", "").strip()
+        identity = self.current_anilist_identity or {}
+        expected_key, _, _ = self._anilist_identity_key(
+            title, self.state_data.get("episode_str", "")
+        )
+        if (
+            identity.get("source_key") != expected_key
+            or identity.get("state") != "SYNCABLE"
+            or not identity.get("validated")
+            or not identity.get("anilist_id")
+        ):
+            self.anilist_log("[AniList] Identity is not verified; sync skipped.")
+            return False, "CURRENT"
+        if not token:
+            self.anilist_log("[Error] No AniList token - connect via Integrations tab.")
             return False, "CURRENT"
 
-
-        except Exception as e:
-
-
-            pass
-
-
-            self.anilist_log(f"[Crash] sync_anilist error: {e}")
-
-
+        total_episodes = identity.get("episodes") or 0
+        if episode_num <= 0 or (total_episodes and episode_num > total_episodes):
+            self.anilist_log("[AniList] Episode failed identity validation; sync skipped.")
             return False, "CURRENT"
 
-
-
+        status = "COMPLETED" if total_episodes and episode_num >= total_episodes else "CURRENT"
+        mutation = """
+        mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus) {
+          SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status) {
+            id progress status
+          }
+        }
+        """
+        try:
+            response = requests.post(
+                "https://graphql.anilist.co",
+                json={"query": mutation, "variables": {
+                    "mediaId": identity["anilist_id"],
+                    "progress": episode_num,
+                    "status": status,
+                }},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=10,
+            )
+            if response.status_code == 401:
+                self.config["anilist_token"] = ""
+                save_config(self.config)
+                self.anilist_log("[Error] Token expired/invalid. Cleared - reconnect via Integrations.")
+                return False, "CURRENT"
+            payload = response.json()
+            entry = ((payload.get("data") or {}).get("SaveMediaListEntry") or {})
+            if not entry.get("id"):
+                errors = payload.get("errors") or []
+                reason = errors[0].get("message", "AniList mutation failed") if errors else "AniList mutation failed"
+                self.anilist_log(f"[Error] Mutation failed: {reason}")
+                return False, status
+            identity["last_synced_episode"] = entry.get("progress")
+            identity["last_synced_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+            self.anilist_identity_cache[identity["source_key"]] = identity.copy()
+            self.save_metadata_cache()
+            self.anilist_log(
+                f"[OK] Synced AniList ID {identity['anilist_id']}: "
+                f"E{entry['progress']} -> {entry['status']}"
+            )
+            threading.Thread(target=self.force_sync_widget, daemon=True).start()
+            threading.Thread(target=self.force_sync_widget_v2, daemon=True).start()
+            return True, entry.get("status", status)
+        except Exception as exc:
+            self.anilist_log(f"[Error] AniList sync failed: {exc}")
+            return False, status
 
 
     def force_sync_widget(self):
@@ -2444,7 +2358,14 @@ class RPCBackend:
         metadata = self.state_data.get("metadata") or {}
 
 
-        anilist_id = metadata.get("anilistId")
+        identity = self.current_anilist_identity or {}
+
+
+        anilist_id = (
+            identity.get("anilist_id")
+            if identity.get("state") == "SYNCABLE" and identity.get("validated")
+            else metadata.get("anilistId")
+        )
 
 
         if not anilist_id:
@@ -2792,13 +2713,13 @@ class RPCBackend:
                 # Check if this was the final episode or marked COMPLETED → show score popup
 
 
-                metadata = self.state_data.get("metadata") or {}
+                identity = self.current_anilist_identity or {}
 
 
-                total_eps = metadata.get("total_episodes") or 0
+                total_eps = identity.get("episodes") or 0
 
 
-                media_id = metadata.get("anilistId")
+                media_id = identity.get("anilist_id")
 
 
                 if (new_status == "COMPLETED" or (total_eps and episode_num >= total_eps)) and media_id:
@@ -3926,6 +3847,11 @@ class RPCBackend:
         cache_path = os.path.join(application_path, CACHE_FILE)
 
 
+        # Keep AniList identity records beside legacy metadata entries so existing
+        # cache files remain valid and are upgraded lazily.
+        self.metadata_cache[ANILIST_IDENTITY_CACHE_KEY] = self.anilist_identity_cache
+
+
         try:
 
 
@@ -4962,6 +4888,11 @@ class RPCBackend:
 
 
                     track_key = f"{current_plid}:{input_uri}:{file_name}:{cleaned_title}:{episode_str}"
+
+
+                    # Resolve once per normalized series/season identity. The resolver
+                    # is asynchronous and auto-sync will wait for SYNCABLE state.
+                    self.ensure_anilist_identity(cleaned_title, episode_str, is_music)
 
 
 
