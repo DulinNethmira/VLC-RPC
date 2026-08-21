@@ -169,7 +169,7 @@ class NotifierClient:
             self._start()
 
 
-        
+
 
 
         if self.proc:
@@ -232,7 +232,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.2.0"
+CURRENT_VERSION = "5.2.2"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -500,7 +500,7 @@ def clean_title(title):
         guessed = guessit.guessit(raw_title_for_guessit)
         cleaned = guessed.get('title', raw_title_for_guessit)
         media_type = guessed.get('type', '')
-        
+
         if media_type == 'movie':
             year = guessed.get('year')
             if year:
@@ -816,9 +816,11 @@ class RPCBackend:
             "anilist_identity": None,
 
 
-            "anilist_identity_state": "UNKNOWN"
-
-
+            "anilist_identity_state": "UNKNOWN",
+            "watch_mode": "NORMAL",
+            "rewatch_number": 0,
+            "possible_rewatch": False,
+            "rewatch_starting": False
         }
 
 
@@ -838,6 +840,12 @@ class RPCBackend:
 
 
         self._anilist_identity_lock = threading.Lock()
+
+
+        self._anilist_media_list_refreshing = set()
+
+
+        self._rewatch_start_lock = threading.Lock()
 
 
         self.anilist_username_cache = None   # None = not fetched yet; False = fetch failed
@@ -1462,6 +1470,16 @@ class RPCBackend:
                 if requested_base and variant_base == requested_base:
                     score = max(score, 88)
                     reason = "exact base title"
+                # AniList commonly labels a sequel as "Title 2", while local
+                # files use "Title Season 2". Treat that as exact only when
+                # both the base title and the explicit season number agree.
+                numeric_sequel = re.fullmatch(r"(.+?)\s+(\d{1,2})", variant)
+                if requested_season > 1 and numeric_sequel:
+                    sequel_base = numeric_sequel.group(1).strip()
+                    sequel_number = int(numeric_sequel.group(2))
+                    if sequel_base == requested_base and sequel_number == requested_season:
+                        score = max(score, 100)
+                        reason = "exact base title with matching numeric sequel"
                 elif len(requested) >= 8 and len(variant) >= 8:
                     ratio = SequenceMatcher(None, requested, variant).ratio()
                     if ratio >= 0.97:
@@ -1471,6 +1489,14 @@ class RPCBackend:
         candidate_season = max(
             self._anilist_season_hint(item) for item in variants
         )
+        for variant in variants:
+            numeric_sequel = re.fullmatch(r"(.+?)\s+(\d{1,2})", variant)
+            if (
+                requested_season > 1
+                and numeric_sequel
+                and numeric_sequel.group(1).strip() == requested_base
+            ):
+                candidate_season = max(candidate_season, int(numeric_sequel.group(2)))
         if requested_season > 1:
             if candidate_season == requested_season:
                 score += 12
@@ -1511,6 +1537,227 @@ class RPCBackend:
             metadata["anilistId"] = identity["anilist_id"]
             if identity.get("episodes"):
                 metadata["total_episodes"] = identity["episodes"]
+
+        if (
+            identity.get("state") == "SYNCABLE"
+            and identity.get("validated")
+            and identity.get("anilist_id")
+        ):
+            self.refresh_anilist_media_list(identity["anilist_id"])
+
+
+    def _get_anilist_media_list(self, anilist_id):
+        """Read the authenticated user's entry for one already-verified media ID."""
+        token = self.config.get("anilist_token", "").strip()
+        if not token:
+            raise RuntimeError("AniList authentication is required")
+
+        query = """
+        query ($mediaId: Int) {
+          MediaList(mediaId: $mediaId) {
+            id status progress repeat
+            media { id episodes }
+          }
+        }
+        """
+        response = requests.post(
+            "https://graphql.anilist.co",
+            json={"query": query, "variables": {"mediaId": anilist_id}},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            timeout=10,
+        )
+        if response.status_code == 401:
+            self.config["anilist_token"] = ""
+            save_config(self.config)
+            raise RuntimeError("AniList authentication expired")
+        payload = response.json()
+        errors = payload.get("errors") or []
+        if response.status_code != 200 or errors:
+            reason = errors[0].get("message", f"AniList HTTP {response.status_code}") if errors else f"AniList HTTP {response.status_code}"
+            raise RuntimeError(reason)
+
+        media_list = (payload.get("data") or {}).get("MediaList")
+        if media_list:
+            media_id = ((media_list.get("media") or {}).get("id"))
+            if media_id != anilist_id:
+                raise RuntimeError("Media ID mismatch")
+        return media_list
+
+
+    def _apply_anilist_media_list(self, anilist_id, media_list):
+        """Apply a fresh MediaList response only if its ID is still current."""
+        current = self.current_anilist_identity or {}
+        if current.get("anilist_id") != anilist_id:
+            return False
+
+        with self._anilist_identity_lock:
+            current["media_list"] = media_list
+            state_identity = self.state_data.get("anilist_identity")
+            if isinstance(state_identity, dict):
+                state_identity["media_list"] = media_list
+
+            status = (media_list or {}).get("status")
+            if status == "REPEATING":
+                self.state_data["watch_mode"] = "REWATCH"
+                self.state_data["rewatch_number"] = (media_list or {}).get("repeat") or 1
+            else:
+                self.state_data["watch_mode"] = "NORMAL"
+                self.state_data["rewatch_number"] = 0
+            self.state_data["possible_rewatch"] = False
+        return True
+
+
+    def _refresh_anilist_media_list_bg(self, anilist_id):
+        try:
+            media_list = self._get_anilist_media_list(anilist_id)
+            if self._apply_anilist_media_list(anilist_id, media_list):
+                status = (media_list or {}).get("status") or "MISSING"
+                repeat = (media_list or {}).get("repeat") or 0
+                self.anilist_log(
+                    f"[AniList] MediaList ID {anilist_id}: status={status}, repeat={repeat}"
+                )
+        except Exception as exc:
+            self.anilist_log(f"[AniList] MediaList refresh failed for ID {anilist_id}: {exc}")
+        finally:
+            with self._anilist_identity_lock:
+                self._anilist_media_list_refreshing.discard(anilist_id)
+
+
+    def refresh_anilist_media_list(self, anilist_id=None):
+        """Schedule one MediaList refresh; never run it from the VLC poll loop."""
+        anilist_id = anilist_id or (self.current_anilist_identity or {}).get("anilist_id")
+        if not anilist_id or not self.config.get("anilist_token", "").strip():
+            return False
+        with self._anilist_identity_lock:
+            if anilist_id in self._anilist_media_list_refreshing:
+                return False
+            self._anilist_media_list_refreshing.add(anilist_id)
+        threading.Thread(
+            target=self._refresh_anilist_media_list_bg,
+            args=(anilist_id,),
+            daemon=True,
+        ).start()
+        return True
+
+
+    def _start_anilist_rewatch(self):
+        """Start exactly one native AniList rewatch after a fresh entry check."""
+        if not self._rewatch_start_lock.acquire(blocking=False):
+            self.anilist_log("[AniList] Rewatch start already in progress.")
+            return False
+
+        self.state_data["rewatch_starting"] = True
+        try:
+            identity = self.current_anilist_identity or {}
+            if (
+                identity.get("state") != "SYNCABLE"
+                or not identity.get("validated")
+                or not identity.get("anilist_id")
+            ):
+                self.anilist_log("[AniList] Rewatch aborted: identity is not verified.")
+                return False
+            if not self.config.get("anilist_token", "").strip():
+                self.anilist_log("[AniList] Rewatch aborted: AniList authentication is required.")
+                return False
+
+            media_id = identity["anilist_id"]
+            media_list = self._get_anilist_media_list(media_id)
+            if not media_list:
+                self.anilist_log("[AniList] Rewatch aborted: no MediaList entry exists.")
+                return False
+            if ((media_list.get("media") or {}).get("id")) != media_id:
+                self.anilist_log("[AniList] Rewatch aborted: Media ID mismatch.")
+                return False
+            if media_list.get("status") == "REPEATING":
+                self._apply_anilist_media_list(media_id, media_list)
+                self.anilist_log(
+                    f"[AniList] Already rewatching #{media_list.get('repeat') or 1}; no repeat increment."
+                )
+                return True
+            if media_list.get("status") != "COMPLETED":
+                self.anilist_log(
+                    f"[AniList] Rewatch aborted: MediaList status is {media_list.get('status') or 'MISSING'}."
+                )
+                return False
+
+            target_repeat = (media_list.get("repeat") or 0) + 1
+            self.anilist_log(
+                f"[AniList] Starting rewatch for ID {media_id}: repeat {target_repeat}."
+            )
+            mutation = """
+            mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus, $repeat: Int) {
+              SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status, repeat: $repeat) {
+                id status progress repeat
+                media { id episodes }
+              }
+            }
+            """
+            response = requests.post(
+                "https://graphql.anilist.co",
+                json={"query": mutation, "variables": {
+                    "mediaId": media_id,
+                    "progress": 0,
+                    "status": "REPEATING",
+                    "repeat": target_repeat,
+                }},
+                headers={
+                    "Authorization": f"Bearer {self.config['anilist_token'].strip()}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=10,
+            )
+            payload = response.json()
+            entry = ((payload.get("data") or {}).get("SaveMediaListEntry") or {})
+            if (
+                response.status_code == 200
+                and entry.get("status") == "REPEATING"
+                and entry.get("repeat") == target_repeat
+                and ((entry.get("media") or {}).get("id")) == media_id
+            ):
+                self._apply_anilist_media_list(media_id, entry)
+                self.anilist_log(
+                    f"[AniList] Rewatch #{target_repeat} started successfully for ID {media_id}."
+                )
+                return True
+
+            errors = payload.get("errors") or []
+            reason = errors[0].get("message", "AniList mutation failed") if errors else "AniList mutation failed"
+            self.anilist_log(f"[AniList] Rewatch start failed: {reason}")
+            return False
+        except Exception as exc:
+            # A timeout can occur after AniList accepted the mutation. Re-read
+            # the authoritative entry before reporting failure; never retry an
+            # increment blindly.
+            try:
+                identity = self.current_anilist_identity or {}
+                media_id = identity.get("anilist_id")
+                media_list = self._get_anilist_media_list(media_id) if media_id else None
+                if media_list and media_list.get("status") == "REPEATING":
+                    self._apply_anilist_media_list(media_id, media_list)
+                    self.anilist_log(
+                        f"[AniList] Rewatch recovered from ambiguous response: #{media_list.get('repeat') or 1}."
+                    )
+                    return True
+            except Exception:
+                pass
+            self.anilist_log(f"[AniList] Rewatch start failed: {exc}")
+            return False
+        finally:
+            self.state_data["rewatch_starting"] = False
+            self._rewatch_start_lock.release()
+
+
+    def start_anilist_rewatch(self):
+        """Queue a rewatch mutation without blocking the pywebview UI thread."""
+        if self.state_data.get("rewatch_starting"):
+            return False
+        threading.Thread(target=self._start_anilist_rewatch, daemon=True).start()
+        return True
 
 
     def _legacy_metadata_identity(self, identity_key, title):
@@ -1741,21 +1988,38 @@ class RPCBackend:
             return False, "CURRENT"
 
         status = "COMPLETED" if total_episodes and episode_num >= total_episodes else "CURRENT"
-        mutation = """
-        mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus) {
-          SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status) {
-            id progress status
-          }
+        variables = {
+            "mediaId": identity["anilist_id"],
+            "progress": episode_num,
+            "status": status,
         }
-        """
+
+        watch_mode = self.state_data.get("watch_mode", "NORMAL")
+        if watch_mode == "REWATCH":
+            status = "COMPLETED" if total_episodes and episode_num >= total_episodes else "REPEATING"
+            variables["status"] = status
+            variables["repeat"] = self.state_data.get("rewatch_number", 1)
+            mutation = """
+            mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus, $repeat: Int) {
+              SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status, repeat: $repeat) {
+                id progress status repeat
+              }
+            }
+            """
+        else:
+            # Do not send a null repeat argument for normal watching. AniList
+            # remains authoritative for an existing completed repeat count.
+            mutation = """
+            mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus) {
+              SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status) {
+                id progress status repeat
+              }
+            }
+            """
         try:
             response = requests.post(
                 "https://graphql.anilist.co",
-                json={"query": mutation, "variables": {
-                    "mediaId": identity["anilist_id"],
-                    "progress": episode_num,
-                    "status": status,
-                }},
+                json={"query": mutation, "variables": variables},
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
@@ -1777,6 +2041,13 @@ class RPCBackend:
                 return False, status
             identity["last_synced_episode"] = entry.get("progress")
             identity["last_synced_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+            media_list = identity.get("media_list") or {"media": {"id": identity["anilist_id"]}}
+            media_list.update({
+                "status": entry.get("status", status),
+                "progress": entry.get("progress", episode_num),
+                "repeat": entry.get("repeat") if entry.get("repeat") is not None else media_list.get("repeat", 0),
+            })
+            self._apply_anilist_media_list(identity["anilist_id"], media_list)
             self.anilist_identity_cache[identity["source_key"]] = identity.copy()
             self.save_metadata_cache()
             self.anilist_log(
@@ -2536,7 +2807,7 @@ class RPCBackend:
         token = self.config.get("anilist_token", "")
 
 
-        
+
 
 
         if _notifier_client.proc:
@@ -2644,6 +2915,7 @@ class RPCBackend:
         episode_num = int(ep_match.group(1))
 
 
+
         title = self.state_data.get("cleaned_title")
 
 
@@ -2656,7 +2928,24 @@ class RPCBackend:
 
 
 
-        cache_key = f"{title}:E{episode_num}"
+        identity = self.current_anilist_identity or {}
+        expected_key, _, _ = self._anilist_identity_key(title, ep_str)
+        if (
+            identity.get("source_key") != expected_key
+            or identity.get("state") != "SYNCABLE"
+            or not identity.get("validated")
+            or not identity.get("anilist_id")
+        ):
+            # Resolution runs independently; do not turn every VLC poll into a
+            # failed threshold event while it is still pending or rejected.
+            return
+
+
+        # Deduplicate by AniList media ID and rewatch cycle. This keeps seasons
+        # isolated and allows episode one to sync in a later, explicit rewatch.
+
+
+        cache_key = f"{identity['anilist_id']}:E{episode_num}:R{self.state_data.get('rewatch_number', 0)}"
 
 
         if cache_key in self.scrobbled_episodes:
@@ -2694,13 +2983,8 @@ class RPCBackend:
 
         if pct >= threshold:
 
-
             self.scrobbled_episodes.add(cache_key)
-
-
             self.anilist_log(f"[Trigger] Threshold crossed for '{title}' E{episode_num} ({pct:.1f}%)")
-
-
             success, new_status = self.sync_anilist(title, episode_num)
 
 
@@ -5448,9 +5732,9 @@ class RPCBackend:
 
 
                             kwargs["activity_type"] = ActivityType.WATCHING
-
-
-                            kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
+                            watch_mode = self.state_data.get("watch_mode", "NORMAL")
+                            cleaned_title = self.state_data.get("cleaned_title", self.state_data["title"])
+                            kwargs["details"] = f"↻ Rewatching {cleaned_title}" if watch_mode == "REWATCH" else cleaned_title
 
 
 
@@ -5484,9 +5768,10 @@ class RPCBackend:
 
 
                             rating_str = f" | ⭐ {rating}" if rating else ""
-
-
-                            state_str = f"{ep_str}{rating_str}"
+                            if watch_mode == "REWATCH":
+                                state_str = f"{ep_str} | Rewatch #{self.state_data.get('rewatch_number', 1)}{rating_str}"
+                            else:
+                                state_str = f"{ep_str}{rating_str}"
 
 
                             if self.state_data["playback_state"] == "paused":
@@ -6785,15 +7070,6 @@ class WebApi:
         
 
 
-    def get_config(self):
-
-
-        return self._backend.config
-
-
-        
-
-
     def get_state(self):
 
 
@@ -6801,6 +7077,12 @@ class WebApi:
 
 
         
+
+
+    def get_config(self):
+
+
+        return self._backend.config
 
 
     def toggle_rpc(self):
@@ -6825,6 +7107,10 @@ class WebApi:
 
 
         return self._backend.rpc_enabled
+
+    def manual_start_rewatch(self):
+        queued = self._backend.start_anilist_rewatch()
+        return {"success": queued, "error": "Rewatch start is already in progress." if not queued else ""}
 
 
 
@@ -7154,10 +7440,16 @@ class WebApi:
         # 3. Clear the scrobbled memory so AniList re-checks this episode
 
 
-        episode_key = f"{title}:E"
-
-
-        b.scrobbled_episodes = {k for k in b.scrobbled_episodes if not k.startswith(episode_key)}
+        identity = b.current_anilist_identity or {}
+        media_id = identity.get("anilist_id")
+        if media_id:
+            episode_key = f"{media_id}:E"
+            b.scrobbled_episodes = {k for k in b.scrobbled_episodes if not k.startswith(episode_key)}
+            b.refresh_anilist_media_list(media_id)
+        else:
+            # Preserve compatibility for any pre-v5.2 in-memory keys.
+            episode_key = f"{title}:E"
+            b.scrobbled_episodes = {k for k in b.scrobbled_episodes if not k.startswith(episode_key)}
 
 
         # 4. Signal the worker to reset track key so it re-pushes RPC
