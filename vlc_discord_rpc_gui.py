@@ -232,7 +232,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.2.2"
+CURRENT_VERSION = "5.2.3"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -621,96 +621,57 @@ def ensure_https(url):
 
 
 
-def load_config():
+def _legacy_config_path():
+    application_path = (
+        os.path.dirname(sys.executable)
+        if getattr(sys, "frozen", False)
+        else os.path.dirname(os.path.abspath(__file__))
+    )
+    return os.path.join(application_path, CONFIG_FILE)
 
 
-    if getattr(sys, 'frozen', False):
+def _persistent_config_path():
+    """Keep OAuth credentials outside the replaceable application directory."""
+    local_app_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(local_app_data, "VLC RPC", CONFIG_FILE)
 
 
-        application_path = os.path.dirname(sys.executable)
-
-
-    else:
-
-
-        application_path = os.path.dirname(os.path.abspath(__file__))
-
-
-    config_path = os.path.join(application_path, CONFIG_FILE)
-
-
-    
-
-
-    if not os.path.exists(config_path):
-
-
-        return DEFAULT_CONFIG.copy()
-
-
+def _read_config_file(config_path):
     try:
-
-
-        with open(config_path, "r") as f:
-
-
-            config = json.load(f)
-
-
-            for k, v in DEFAULT_CONFIG.items():
-
-
-                if k not in config:
-
-
-                    config[k] = v
-
-
-            return config
-
-
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
+        if not isinstance(config, dict):
+            return None
+        merged = DEFAULT_CONFIG.copy()
+        merged.update(config)
+        return merged
     except Exception:
+        return None
 
 
-        return DEFAULT_CONFIG.copy()
+def load_config():
+    persistent_path = _persistent_config_path()
+    config = _read_config_file(persistent_path)
+    if config is not None:
+        return config
 
-
-
+    # Upgrade installations that stored config.json beside VLC RPC.exe. This
+    # runs once, before an update can replace that directory and lose OAuth.
+    legacy_path = _legacy_config_path()
+    config = _read_config_file(legacy_path)
+    if config is not None:
+        save_config(config)
+        return config
+    return DEFAULT_CONFIG.copy()
 
 
 def save_config(config):
-
-
-    if getattr(sys, 'frozen', False):
-
-
-        application_path = os.path.dirname(sys.executable)
-
-
-    else:
-
-
-        application_path = os.path.dirname(os.path.abspath(__file__))
-
-
-    config_path = os.path.join(application_path, CONFIG_FILE)
-
-
-    
-
-
     try:
-
-
-        with open(config_path, "w") as f:
-
-
-            json.dump(config, f, indent=4)
-
-
+        config_path = _persistent_config_path()
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as config_file:
+            json.dump(config, config_file, indent=4)
     except Exception:
-
-
         pass
 
 
