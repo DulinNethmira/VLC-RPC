@@ -108,11 +108,26 @@ window.updateState = function(state) {
         } else if (isMusic) {
             badge.textContent = 'Listening';
             badge.className = 'hero-badge listening';
+        } else if (state.watch_mode === 'REWATCH') {
+            badge.textContent = `↻ Rewatching #${state.rewatch_number || 1}`;
+            badge.className = 'hero-badge rewatching';
         } else {
             badge.textContent = 'Watching';
             badge.className = 'hero-badge';
         }
         
+        const btnRewatch = document.getElementById('btn-start-rewatch');
+        if (btnRewatch) {
+            const isCompleted = state.anilist_identity && state.anilist_identity.media_list && state.anilist_identity.media_list.status === 'COMPLETED';
+            if (state.watch_mode !== 'REWATCH' && isCompleted && !isMusic && state.anilist_identity.validated) {
+                btnRewatch.style.display = 'inline-block';
+                btnRewatch.disabled = Boolean(state.rewatch_starting);
+                btnRewatch.textContent = state.rewatch_starting ? 'Starting Rewatch...' : '↻ Start Rewatch';
+            } else {
+                btnRewatch.style.display = 'none';
+            }
+        }
+
         // Quality & Audio badges
         const qualityBadge = document.getElementById('quality-badge');
         if (state.quality) {
@@ -196,6 +211,22 @@ function refreshStatus() {
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.force_update();
     }
+}
+
+function startRewatch() {
+    const button = document.getElementById('btn-start-rewatch');
+    if (!button || button.disabled || !window.pywebview || !window.pywebview.api) return;
+    button.disabled = true;
+    button.textContent = 'Starting Rewatch...';
+    window.pywebview.api.manual_start_rewatch().then(result => {
+        if (!result || !result.success) {
+            button.disabled = false;
+            button.textContent = '↻ Start Rewatch';
+        }
+    }).catch(() => {
+        button.disabled = false;
+        button.textContent = '↻ Start Rewatch';
+    });
 }
 
 // ===== Save Config =====

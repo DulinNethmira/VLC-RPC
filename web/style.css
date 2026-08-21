@@ -409,6 +409,27 @@ body {
     background: rgba(232, 119, 46, 0.12);
 }
 
+.hero-badge.rewatching {
+    color: #e84393;
+    background: rgba(232, 67, 147, 0.12);
+}
+
+button.btn-rewatch {
+    border: 1px solid rgba(232, 67, 147, 0.3);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+button.btn-rewatch:hover {
+    background: rgba(232, 67, 147, 0.25);
+    border-color: rgba(232, 67, 147, 0.5);
+}
+
+button.btn-rewatch:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
 .hero-title {
     font-size: 1.4rem;
     font-weight: 700;
