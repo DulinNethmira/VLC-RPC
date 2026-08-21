@@ -1,6 +1,9 @@
 """Focused regression tests for the AniList identity and sync safety boundary."""
 
+import json
+import os
 import threading
+import tempfile
 
 import vlc_discord_rpc_gui as app
 
@@ -246,6 +249,29 @@ def test_explicit_rewatch_uses_same_media_id_once():
     assert backend.state_data["rewatch_number"] == 2
 
 
+def test_config_migrates_from_replaceable_app_directory():
+    original_persistent = app._persistent_config_path
+    original_legacy = app._legacy_config_path
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            persistent_path = os.path.join(directory, "appdata", "config.json")
+            legacy_path = os.path.join(directory, "legacy", "config.json")
+            os.makedirs(os.path.dirname(legacy_path))
+            with open(legacy_path, "w", encoding="utf-8") as config_file:
+                json.dump({"anilist_token": "preserve-me"}, config_file)
+            app._persistent_config_path = lambda: persistent_path
+            app._legacy_config_path = lambda: legacy_path
+
+            config = app.load_config()
+            assert config["anilist_token"] == "preserve-me"
+            assert os.path.exists(persistent_path)
+            with open(persistent_path, encoding="utf-8") as config_file:
+                assert json.load(config_file)["anilist_token"] == "preserve-me"
+    finally:
+        app._persistent_config_path = original_persistent
+        app._legacy_config_path = original_legacy
+
+
 if __name__ == "__main__":
     test_reject_unrelated_title()
     test_season_protection()
@@ -256,4 +282,5 @@ if __name__ == "__main__":
     test_cross_anime_identity_cannot_sync()
     test_sync_uses_verified_id_without_search()
     test_explicit_rewatch_uses_same_media_id_once()
+    test_config_migrates_from_replaceable_app_directory()
     print("AniList identity tests passed")
