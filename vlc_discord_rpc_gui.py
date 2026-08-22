@@ -232,7 +232,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.2.3"
+CURRENT_VERSION = "5.2.4"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -1555,6 +1555,7 @@ class RPCBackend:
         if current.get("anilist_id") != anilist_id:
             return False
 
+        trigger_rewatch_popup = False
         with self._anilist_identity_lock:
             current["media_list"] = media_list
             state_identity = self.state_data.get("anilist_identity")
@@ -1565,11 +1566,91 @@ class RPCBackend:
             if status == "REPEATING":
                 self.state_data["watch_mode"] = "REWATCH"
                 self.state_data["rewatch_number"] = (media_list or {}).get("repeat") or 1
+                self.state_data["possible_rewatch"] = False
+            elif status == "COMPLETED":
+                # User is watching an anime they already completed — possible rewatch
+                self.state_data["watch_mode"] = "NORMAL"
+                self.state_data["rewatch_number"] = 0
+                if not self.state_data.get("possible_rewatch"):
+                    self.state_data["possible_rewatch"] = True
+                    trigger_rewatch_popup = True
             else:
                 self.state_data["watch_mode"] = "NORMAL"
                 self.state_data["rewatch_number"] = 0
-            self.state_data["possible_rewatch"] = False
+                self.state_data["possible_rewatch"] = False
+
+        if trigger_rewatch_popup:
+            self._show_rewatch_popup(anilist_id, media_list)
         return True
+
+
+    def _show_rewatch_popup(self, anilist_id, media_list):
+        """Show a rewatch confirmation popup via the notifier subprocess."""
+        identity = self.current_anilist_identity or {}
+        title = identity.get("title") or identity.get("source_title") or ""
+        repeat = (media_list or {}).get("repeat") or 0
+        token = self.config.get("anilist_token", "").strip()
+
+        # Deduplicate: only prompt once per AniList ID per session
+        rewatch_key = (anilist_id, "rewatch_prompt")
+        if rewatch_key in self.scored_episodes:
+            return
+        self.scored_episodes.add(rewatch_key)
+
+        if not token:
+            self.anilist_log("[AniList] Rewatch popup skipped: no AniList token.")
+            return
+
+        if _notifier_client.proc:
+            try:
+                import json as _json
+                data = _json.dumps({
+                    "type": "rewatch_popup",
+                    "title": title,
+                    "media_id": anilist_id,
+                    "current_repeat": repeat,
+                    "token": token,
+                })
+                _notifier_client.proc.stdin.write(data + "\n")
+                _notifier_client.proc.stdin.flush()
+                self.anilist_log(f"[AniList] Rewatch popup triggered for '{title}'.")
+            except Exception as e:
+                self.log(f"Failed to trigger rewatch popup: {e}")
+
+
+    def _check_rewatch_signals(self):
+        """Check for signal files written by the notifier after a rewatch is started."""
+        try:
+            signal_dir = os.path.join(application_path, "rewatch_signals")
+            if not os.path.isdir(signal_dir):
+                return
+            for fname in os.listdir(signal_dir):
+                if not fname.endswith(".signal"):
+                    continue
+                fpath = os.path.join(signal_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as sf:
+                        import json as _json
+                        sig = _json.load(sf)
+                    os.remove(fpath)
+                    media_id = sig.get("media_id")
+                    new_repeat = sig.get("repeat")
+                    if media_id:
+                        self.anilist_log(
+                            f"[AniList] Rewatch signal received: ID {media_id}, repeat #{new_repeat}."
+                        )
+                        # Reset possible_rewatch so the popup doesn't re-trigger
+                        self.state_data["possible_rewatch"] = False
+                        # Refresh the MediaList to pick up the new REPEATING status
+                        self.refresh_anilist_media_list(media_id)
+                except Exception as exc:
+                    self.log(f"[Rewatch] Failed to process signal {fname}: {exc}")
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+        except Exception:
+            pass
 
 
     def _refresh_anilist_media_list_bg(self, anilist_id):
@@ -5168,7 +5249,7 @@ class RPCBackend:
 
 
                     self.check_auto_sync()
-
+                    self._check_rewatch_signals()
 
                     self.check_aniskip()
 

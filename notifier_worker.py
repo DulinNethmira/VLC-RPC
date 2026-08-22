@@ -148,6 +148,8 @@ class MacOSNotifier:
                 if msg:
                     if msg.get("type") == "score_popup":
                         self.show_score_popup(msg)
+                    elif msg.get("type") == "rewatch_popup":
+                        self.show_rewatch_popup(msg)
                     else:
                         icons = {
                             "success": ("✓", "#32d74b"),
@@ -279,6 +281,96 @@ class MacOSNotifier:
             except Exception:
                 pass
         popup.after(50, fade_in)
+
+
+    def show_rewatch_popup(self, msg_data):
+        title = msg_data.get("title", "")
+        media_id = msg_data.get("media_id")
+        current_repeat = msg_data.get("current_repeat", 0)
+        token = msg_data.get("token", "")
+
+        popup = tk.Toplevel(self.root)
+        popup.title("Start Rewatch?")
+        popup.overrideredirect(True)
+        popup.attributes("-topmost", True)
+        popup.configure(bg="#1e1e1e")
+
+        screen_w = popup.winfo_screenwidth()
+        screen_h = popup.winfo_screenheight()
+        w, h = 320, 160
+        x = screen_w - w - 20
+        y = screen_h - h - 60
+        popup.geometry(f"{w}x{h}+{x}+{y}")
+        popup.attributes("-alpha", 0.0)
+
+        # Outer border
+        outer = tk.Frame(popup, bg="#3a3a3a")
+        outer.pack(fill=tk.BOTH, expand=True)
+        inner = tk.Frame(outer, bg="#1e1e1e")
+        inner.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+
+        tk.Label(inner, text="↻  Start Rewatch?", font=("Helvetica Neue", 12, "bold"),
+                 fg="#e84393", bg="#1e1e1e").pack(pady=(14, 2))
+        tk.Label(inner, text=f"{title}", font=("Helvetica Neue", 10),
+                 fg="#a0a0a0", bg="#1e1e1e", wraplength=290).pack()
+        tk.Label(inner, text=f"Previous watches: {current_repeat}", font=("Helvetica Neue", 9, "italic"),
+                 fg="#777777", bg="#1e1e1e").pack(pady=(2, 8))
+
+        def _submit():
+            target_repeat = current_repeat + 1
+            if token and media_id:
+                try:
+                    import requests
+                    mutation = '''
+                    mutation ($mediaId: Int, $progress: Int, $status: MediaListStatus, $repeat: Int) {
+                      SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status, repeat: $repeat) { id status repeat }
+                    }'''
+                    r = requests.post(
+                        "https://graphql.anilist.co",
+                        json={"query": mutation, "variables": {
+                            "mediaId": media_id,
+                            "progress": 0,
+                            "status": "REPEATING",
+                            "repeat": target_repeat
+                        }},
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                        timeout=8
+                    )
+                    if r.status_code == 200:
+                        # Success - queue toast and write signal file
+                        self.queue.put({"title": "Rewatch Started!", "msg": f"{title} (Rewatch #{target_repeat})", "icon": "sync"})
+                        
+                        import os, json as _json
+                        # Find the parent app directory
+                        app_dir = os.path.dirname(os.path.abspath(__file__))
+                        sig_dir = os.path.join(app_dir, "rewatch_signals")
+                        os.makedirs(sig_dir, exist_ok=True)
+                        sig_path = os.path.join(sig_dir, f"rewatch_started_{media_id}_{int(time.time())}.signal")
+                        with open(sig_path, "w", encoding="utf-8") as sf:
+                            _json.dump({"media_id": media_id, "repeat": target_repeat}, sf)
+                except Exception as e:
+                    pass
+            popup.destroy()
+
+        btn_frame = tk.Frame(inner, bg="#1e1e1e")
+        btn_frame.pack(pady=(8, 12))
+        tk.Button(btn_frame, text="Start Rewatch", font=("Helvetica Neue", 11, "bold"),
+                  bg="#e84393", fg="#ffffff", bd=0, padx=16, pady=5, cursor="hand2",
+                  command=_submit).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Skip", font=("Helvetica Neue", 11),
+                  bg="#2a2a2a", fg="#a0a0a0", bd=0, padx=16, pady=5, cursor="hand2",
+                  command=popup.destroy).pack(side=tk.LEFT, padx=4)
+
+        def fade_in():
+            try:
+                a = popup.attributes("-alpha")
+                if a < 0.95:
+                    popup.attributes("-alpha", min(a + 0.07, 0.95))
+                    popup.after(16, fade_in)
+            except Exception:
+                pass
+        popup.after(50, fade_in)
+
 
 def stdin_reader(q):
     """Read lines from stdin and put them in the queue."""
