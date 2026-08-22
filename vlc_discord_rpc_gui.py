@@ -232,7 +232,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.2.5"
+CURRENT_VERSION = "5.2.6"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -1513,17 +1513,46 @@ class RPCBackend:
         if not token:
             raise RuntimeError("AniList authentication is required")
 
-        query = """
-        query ($mediaId: Int) {
-          MediaList(mediaId: $mediaId) {
-            id status progress repeat
-            media { id episodes }
-          }
-        }
-        """
+        username = getattr(self, "anilist_username_cache", None)
+        if not username:
+            try:
+                r = requests.post(
+                    "https://graphql.anilist.co",
+                    json={"query": "query { Viewer { name } }"},
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    timeout=5
+                )
+                if r.status_code == 200:
+                    username = (r.json().get("data") or {}).get("Viewer", {}).get("name")
+                    if username:
+                        self.anilist_username_cache = username
+            except Exception:
+                pass
+
+        if username:
+            query = """
+            query ($mediaId: Int, $userName: String) {
+              MediaList(mediaId: $mediaId, userName: $userName) {
+                id status progress repeat
+                media { id episodes }
+              }
+            }
+            """
+            variables = {"mediaId": anilist_id, "userName": username}
+        else:
+            query = """
+            query ($mediaId: Int) {
+              MediaList(mediaId: $mediaId) {
+                id status progress repeat
+                media { id episodes }
+              }
+            }
+            """
+            variables = {"mediaId": anilist_id}
+
         response = requests.post(
             "https://graphql.anilist.co",
-            json={"query": query, "variables": {"mediaId": anilist_id}},
+            json={"query": query, "variables": variables},
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
