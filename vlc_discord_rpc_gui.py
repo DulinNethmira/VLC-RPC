@@ -213,6 +213,10 @@ CONFIG_FILE = "config.json"
 
 CACHE_FILE = "metadata_cache.json"
 
+# Cache schema versions — bump to auto-invalidate incompatible old entries
+METADATA_CACHE_VERSION = 2
+GEMINI_CACHE_VERSION   = 2
+
 
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
 
@@ -232,7 +236,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.2.6"
+CURRENT_VERSION = "5.3.0"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -669,8 +673,12 @@ def save_config(config):
     try:
         config_path = _persistent_config_path()
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
-        with open(config_path, "w", encoding="utf-8") as config_file:
+        tmp_path = config_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as config_file:
             json.dump(config, config_file, indent=4)
+            config_file.flush()
+            os.fsync(config_file.fileno())
+        os.replace(tmp_path, config_path)
     except Exception:
         pass
 
@@ -678,6 +686,167 @@ def save_config(config):
 
 
 
+
+
+
+
+import queue
+from pypresence import Presence
+
+class DiscordManager(threading.Thread):
+    def __init__(self, backend_ref):
+        super().__init__(daemon=True)
+        self.backend_ref = backend_ref
+        self.cmd_queue = queue.Queue()
+        self.rpc = None
+        self.current_client_id = None
+        self.current_generation = -1
+        self.current_kwargs = None
+        
+        self.rpc_backoff = 1
+        self.rpc_reconnect_at = 0.0
+        self.state = "DISCONNECTED"
+        self._stop_event = threading.Event()
+        self.last_update_time = 0
+
+    def submit_activity(self, generation, client_id, kwargs):
+        self.cmd_queue.put({"type": "update", "generation": generation, "client_id": client_id, "kwargs": kwargs})
+        
+    def clear_activity(self, generation):
+        self.cmd_queue.put({"type": "clear", "generation": generation})
+        
+    def stop(self):
+        self._stop_event.set()
+        self.cmd_queue.put({"type": "stop"})
+        
+    def set_state(self, new_state, message):
+        self.state = new_state
+        self.backend_ref.state_data["rpc_connected"] = (new_state == "CONNECTED")
+        health_status = "HEALTHY" if new_state == "CONNECTED" else ("RECONNECTING" if new_state in ("CONNECTING", "RECONNECTING") else "DISCONNECTED")
+        self.backend_ref.state_data.setdefault("health", {})["discord"] = health_status
+        if message:
+            self.backend_ref.state_data["status_message"] = message
+            if "error" in message.lower() or "dropped" in message.lower():
+                self.backend_ref.log(f"[DISCORD] {message}")
+            elif "Connecting" in message or "Shutting" in message or "Shutdown" in message or "Closing" in message:
+                self.backend_ref.log(f"[DISCORD] {message}")
+            else:
+                # Usually "Connected to Discord."
+                self.backend_ref.log(f"[RECOVERY] Discord reconnect successful: {message}")
+
+    def truncate_str(self, val, limit=120):
+        if isinstance(val, str) and len(val) > limit:
+            return val[:limit-3] + "..."
+        return val
+
+    def process_kwargs(self, kwargs):
+        if not kwargs: return kwargs
+        ret = kwargs.copy()
+        if "details" in ret: ret["details"] = self.truncate_str(ret["details"])
+        if "state" in ret: ret["state"] = self.truncate_str(ret["state"])
+        if "large_text" in ret: ret["large_text"] = self.truncate_str(ret["large_text"])
+        return ret
+        
+    def _is_significant_change(self, old, new):
+        if not old: return True
+        if set(old.keys()) != set(new.keys()): return True
+        for k, v in new.items():
+            if k in ('start', 'end') and isinstance(v, (int, float)):
+                old_v = old.get(k)
+                if not isinstance(old_v, (int, float)) or abs(v - old_v) > 3:
+                    return True
+            elif old.get(k) != v:
+                return True
+        return False
+
+    def run(self):
+        self.set_state("CONNECTING", "Starting Discord manager...")
+        desired_client_id = None
+        
+        while not self._stop_event.is_set():
+            try:
+                cmd = self.cmd_queue.get(timeout=1.0)
+                if cmd["type"] == "stop":
+                    break
+                elif cmd["type"] == "clear":
+                    if cmd["generation"] >= self.current_generation:
+                        self.current_generation = cmd["generation"]
+                        self.current_kwargs = None
+                elif cmd["type"] == "update":
+                    if cmd["generation"] >= self.current_generation:
+                        self.current_generation = cmd["generation"]
+                        desired_client_id = cmd["client_id"]
+                        self.current_kwargs = cmd["kwargs"]
+            except queue.Empty:
+                pass
+
+            if self._stop_event.is_set():
+                break
+
+            # Handle Client ID changes
+            if self.rpc and desired_client_id and self.current_client_id != desired_client_id:
+                try: self.rpc.close()
+                except Exception: pass
+                self.rpc = None
+                self.current_client_id = None
+                self.set_state("DISCONNECTED", f"Closing Discord RPC (Client ID changed to {desired_client_id})")
+
+            # Connect / Reconnect
+            if not self.rpc and desired_client_id and time.time() >= self.rpc_reconnect_at:
+                self.set_state("CONNECTING", f"Connecting to Discord RPC (Client ID: {desired_client_id})...")
+                try:
+                    self.rpc = Presence(desired_client_id)
+                    self.rpc.connect()
+                    self.current_client_id = desired_client_id
+                    self.set_state("CONNECTED", "Connected to Discord.")
+                    self.rpc_backoff = 1
+                    self.rpc_reconnect_at = 0.0
+                    self.last_update_time = 0
+                except Exception as e:
+                    self.rpc = None
+                    self.current_client_id = None
+                    self.set_state("RECONNECTING", f"Discord not found or error ({e}) \u2014 retrying...")
+                    self.rpc_reconnect_at = time.time() + self.rpc_backoff
+                    self.rpc_backoff = min(self.rpc_backoff * 2, 30)
+
+            # Publish
+            if self.rpc and self.state == "CONNECTED":
+                if not self.current_kwargs:
+                    if getattr(self, "_last_published_kwargs", None) is not None:
+                        try:
+                            self.rpc.clear()
+                            self._last_published_kwargs = None
+                            self.backend_ref.log("[DISCORD] Activity cleared")
+                        except Exception:
+                            pass
+                else:
+                    processed = self.process_kwargs(self.current_kwargs)
+                    last_published = getattr(self, "_last_published_kwargs", {})
+                    if self._is_significant_change(last_published, processed):
+                        now = time.time()
+                        if now - self.last_update_time >= 5:
+                            try:
+                                self.rpc.update(**processed)
+                                self._last_published_kwargs = processed.copy()
+                                self.last_update_time = now
+                            except Exception as e:
+                                self.backend_ref.log(f"[DISCORD] Update error: {e}")
+                                try: self.rpc.close()
+                                except Exception: pass
+                                self.rpc = None
+                                self.current_client_id = None
+                                self.set_state("RECONNECTING", "Connection dropped during update \u2014 scheduling reconnect.")
+                                self.rpc_reconnect_at = time.time() + self.rpc_backoff
+                                self.rpc_backoff = min(self.rpc_backoff * 2, 30)
+
+        # Shutdown
+        self.set_state("STOPPING", "Shutting down Discord manager...")
+        if self.rpc:
+            try: self.rpc.clear()
+            except Exception: pass
+            try: self.rpc.close()
+            except Exception: pass
+        self.set_state("DISCONNECTED", "Shutdown complete.")
 
 
 
@@ -697,6 +866,9 @@ class RPCBackend:
 
 
         self.gemini_fail_times = {}  # tracks last failure time per filename for retry logic
+        self._metadata_neg_cache = {} # maps cache_key -> (fail_time, fail_count)
+        self._anilist_fail_count = 0
+        self._anilist_backoff_until = 0.0
 
 
         self.state_data = {
@@ -781,7 +953,19 @@ class RPCBackend:
             "watch_mode": "NORMAL",
             "rewatch_number": 0,
             "possible_rewatch": False,
-            "rewatch_starting": False
+            "rewatch_starting": False,
+            # Generation stamp: rewatch state is only valid for the generation
+            # in which it was written. Stale writes from async threads are ignored.
+            "_rewatch_generation": -1,
+            "health": {
+                "vlc": "UNKNOWN",
+                "discord": "DISCONNECTED",
+                "anilist": "UNKNOWN",
+                "gemini": "UNKNOWN",
+                "metadata": "UNKNOWN",
+                "cache": "HEALTHY",
+                "ffmpeg": "UNKNOWN"
+            }
         }
 
 
@@ -807,6 +991,9 @@ class RPCBackend:
 
 
         self._rewatch_start_lock = threading.Lock()
+
+        self._metadata_cache_lock = threading.Lock()
+        self._gemini_cache_lock = threading.Lock()
 
 
         self.anilist_username_cache = None   # None = not fetched yet; False = fetch failed
@@ -868,38 +1055,46 @@ class RPCBackend:
 
         self.gemini_cache = {}
 
+        # Resolve cache path relative to exe/script, same as metadata cache
+        if getattr(sys, 'frozen', False):
+            _gcache_base = os.path.dirname(sys.executable)
+        else:
+            _gcache_base = os.path.dirname(os.path.abspath(__file__))
+        self.gemini_cache_file = os.path.join(_gcache_base, self.gemini_cache_file)
 
+        # Hardened Gemini cache load -- validate schema, backup on corruption
         try:
-
-
-            import json, os
-
-
             if os.path.exists(self.gemini_cache_file):
-
-
-                with open(self.gemini_cache_file, 'r', encoding='utf-8') as gcf:
-
-
-                    self.gemini_cache = json.load(gcf)
-
-
-                    # Convert arrays back to tuples since JSON arrays are loaded as lists
-
-
-                    for k, v in self.gemini_cache.items():
-
-
-                        if isinstance(v, list):
-
-
-                            self.gemini_cache[k] = tuple(v)
-
-
-        except Exception:
-
-
-            pass
+                try:
+                    raw_gc = open(self.gemini_cache_file, 'r', encoding='utf-8').read().strip()
+                except Exception:
+                    raw_gc = ''
+                if raw_gc:
+                    try:
+                        raw_dict = json.loads(raw_gc)
+                    except Exception:
+                        print('[RECOVERY] Gemini cache repaired -- JSON parse failed; backing up bad file.')
+                        if hasattr(self, "state_data") and "health" in self.state_data: self.state_data["health"]["cache"] = "REPAIRED"
+                        try:
+                            import shutil
+                            shutil.copy2(self.gemini_cache_file, self.gemini_cache_file + '.bak')
+                        except Exception:
+                            pass
+                        raw_dict = {}
+                    if not isinstance(raw_dict, dict):
+                        raw_dict = {}
+                    cleaned_gc = {}
+                    for k, v in raw_dict.items():
+                        if v is None or v == 'pending':
+                            continue
+                        if isinstance(v, list) and len(v) >= 2:
+                            cleaned_gc[k] = tuple(v)
+                        elif isinstance(v, tuple) and len(v) >= 2:
+                            cleaned_gc[k] = v
+                    self.gemini_cache = cleaned_gc
+        except Exception as ex:
+            print('[GEMINI CACHE] Load error:', ex)
+            self.gemini_cache = {}
 
 
 
@@ -909,6 +1104,9 @@ class RPCBackend:
 
 
         self.worker_thread.start()
+        self.media_generation = 0
+        self.discord_manager = DiscordManager(self)
+        self.discord_manager.start()
 
 
         
@@ -1023,17 +1221,13 @@ class RPCBackend:
 
 
         try:
-
-
-            with open(history_path, "w") as f:
-
-
+            tmp_path = history_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self.history, f, indent=4)
-
-
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, history_path)
         except Exception:
-
-
             pass
 
 
@@ -1480,7 +1674,15 @@ class RPCBackend:
         return max(0, min(score, 100)), reason
 
 
-    def _apply_anilist_identity(self, identity):
+    def _apply_anilist_identity(self, identity, launch_generation=None):
+        # Generation guard: only the async resolver passes launch_generation.
+        # Synchronous (poll-loop) callers always apply immediately.
+        if launch_generation is not None and self.media_generation != launch_generation:
+            self.log(
+                f"[STATE] Discarded stale identity apply from generation {launch_generation} "
+                f"(current={self.media_generation})"
+            )
+            return
         self.current_anilist_identity = identity
         self.state_data["anilist_identity"] = identity.copy()
         self.state_data["anilist_identity_state"] = identity.get("state", "UNKNOWN")
@@ -1578,10 +1780,17 @@ class RPCBackend:
         return media_list
 
 
-    def _apply_anilist_media_list(self, anilist_id, media_list):
-        """Apply a fresh MediaList response only if its ID is still current."""
+    def _apply_anilist_media_list(self, anilist_id, media_list, launch_generation=None):
+        """Apply a fresh MediaList response only if its ID and generation are still current."""
         current = self.current_anilist_identity or {}
         if current.get("anilist_id") != anilist_id:
+            return False
+        # Generation guard: if media changed since this refresh was launched, discard
+        if launch_generation is not None and self.media_generation != launch_generation:
+            self.log(
+                f"[STATE] Discarded stale MediaList apply for ID {anilist_id} "
+                f"(gen {launch_generation} -> {self.media_generation})"
+            )
             return False
 
         trigger_rewatch_popup = False
@@ -1596,10 +1805,14 @@ class RPCBackend:
                 self.state_data["watch_mode"] = "REWATCH"
                 self.state_data["rewatch_number"] = (media_list or {}).get("repeat") or 1
                 self.state_data["possible_rewatch"] = False
+                self.state_data["_rewatch_generation"] = self.media_generation
+                self.log(f"[REWATCH] Mode=REWATCH (repeat #{self.state_data['rewatch_number']}) "
+                         f"for session {self.media_generation}")
             elif status == "COMPLETED":
                 # User is watching an anime they already completed — possible rewatch
                 self.state_data["watch_mode"] = "NORMAL"
                 self.state_data["rewatch_number"] = 0
+                self.state_data["_rewatch_generation"] = self.media_generation
                 if not self.state_data.get("possible_rewatch"):
                     self.state_data["possible_rewatch"] = True
                     trigger_rewatch_popup = True
@@ -1607,6 +1820,7 @@ class RPCBackend:
                 self.state_data["watch_mode"] = "NORMAL"
                 self.state_data["rewatch_number"] = 0
                 self.state_data["possible_rewatch"] = False
+                self.state_data["_rewatch_generation"] = self.media_generation
 
         if trigger_rewatch_popup:
             self._show_rewatch_popup(anilist_id, media_list)
@@ -1665,13 +1879,21 @@ class RPCBackend:
                     media_id = sig.get("media_id")
                     new_repeat = sig.get("repeat")
                     if media_id:
-                        self.anilist_log(
-                            f"[AniList] Rewatch signal received: ID {media_id}, repeat #{new_repeat}."
-                        )
-                        # Reset possible_rewatch so the popup doesn't re-trigger
-                        self.state_data["possible_rewatch"] = False
-                        # Refresh the MediaList to pick up the new REPEATING status
-                        self.refresh_anilist_media_list(media_id)
+                        # Guard: only process signal if it matches the currently playing media
+                        current_id = (self.current_anilist_identity or {}).get("anilist_id")
+                        if media_id != current_id:
+                            self.log(
+                                f"[REWATCH] Signal for ID {media_id} discarded "
+                                f"— current media is ID {current_id}"
+                            )
+                        else:
+                            self.anilist_log(
+                                f"[AniList] Rewatch signal received: ID {media_id}, repeat #{new_repeat}."
+                            )
+                            # Reset possible_rewatch so the popup doesn't re-trigger
+                            self.state_data["possible_rewatch"] = False
+                            # Refresh the MediaList to pick up the new REPEATING status
+                            self.refresh_anilist_media_list(media_id)
                 except Exception as exc:
                     self.log(f"[Rewatch] Failed to process signal {fname}: {exc}")
                     try:
@@ -1682,17 +1904,24 @@ class RPCBackend:
             pass
 
 
-    def _refresh_anilist_media_list_bg(self, anilist_id):
+    def _refresh_anilist_media_list_bg(self, anilist_id, launch_generation=None):
         try:
             media_list = self._get_anilist_media_list(anilist_id)
-            if self._apply_anilist_media_list(anilist_id, media_list):
+            if self._apply_anilist_media_list(anilist_id, media_list, launch_generation):
+                if self._anilist_fail_count > 0:
+                    self._set_health("anilist", "HEALTHY", "AniList request retried successfully")
+                self._anilist_fail_count = 0
+                self._anilist_backoff_until = 0.0
                 status = (media_list or {}).get("status") or "MISSING"
                 repeat = (media_list or {}).get("repeat") or 0
                 self.anilist_log(
                     f"[AniList] MediaList ID {anilist_id}: status={status}, repeat={repeat}"
                 )
         except Exception as exc:
-            self.anilist_log(f"[AniList] MediaList refresh failed for ID {anilist_id}: {exc}")
+            self._anilist_fail_count += 1
+            backoff = min(30 * (2 ** self._anilist_fail_count), 3600)
+            self._anilist_backoff_until = time.time() + backoff
+            self._set_health("anilist", "DEGRADED", f"AniList refresh failed: {exc}")
         finally:
             with self._anilist_identity_lock:
                 self._anilist_media_list_refreshing.discard(anilist_id)
@@ -1703,13 +1932,15 @@ class RPCBackend:
         anilist_id = anilist_id or (self.current_anilist_identity or {}).get("anilist_id")
         if not anilist_id or not self.config.get("anilist_token", "").strip():
             return False
+        # Capture generation NOW so the background thread can reject stale applies
+        launch_generation = self.media_generation
         with self._anilist_identity_lock:
             if anilist_id in self._anilist_media_list_refreshing:
                 return False
             self._anilist_media_list_refreshing.add(anilist_id)
         threading.Thread(
             target=self._refresh_anilist_media_list_bg,
-            args=(anilist_id,),
+            args=(anilist_id, launch_generation),
             daemon=True,
         ).start()
         return True
@@ -1721,6 +1952,9 @@ class RPCBackend:
             self.anilist_log("[AniList] Rewatch start already in progress.")
             return False
 
+        # Capture generation at entry. If media changes before we finish,
+        # we discard the result rather than writing REWATCH state to the new title.
+        entry_gen = self.media_generation
         self.state_data["rewatch_starting"] = True
         try:
             identity = self.current_anilist_identity or {}
@@ -1744,7 +1978,10 @@ class RPCBackend:
                 self.anilist_log("[AniList] Rewatch aborted: Media ID mismatch.")
                 return False
             if media_list.get("status") == "REPEATING":
-                self._apply_anilist_media_list(media_id, media_list)
+                if self.media_generation != entry_gen:
+                    self.anilist_log("[AniList] Rewatch aborted: media changed during fetch.")
+                    return False
+                self._apply_anilist_media_list(media_id, media_list, entry_gen)
                 self.anilist_log(
                     f"[AniList] Already rewatching #{media_list.get('repeat') or 1}; no repeat increment."
                 )
@@ -1790,7 +2027,12 @@ class RPCBackend:
                 and entry.get("repeat") == target_repeat
                 and ((entry.get("media") or {}).get("id")) == media_id
             ):
-                self._apply_anilist_media_list(media_id, entry)
+                if self.media_generation != entry_gen:
+                    self.anilist_log(
+                        "[AniList] Rewatch mutation succeeded but media changed — state not applied."
+                    )
+                    return False
+                self._apply_anilist_media_list(media_id, entry, entry_gen)
                 self.anilist_log(
                     f"[AniList] Rewatch #{target_repeat} started successfully for ID {media_id}."
                 )
@@ -1809,11 +2051,12 @@ class RPCBackend:
                 media_id = identity.get("anilist_id")
                 media_list = self._get_anilist_media_list(media_id) if media_id else None
                 if media_list and media_list.get("status") == "REPEATING":
-                    self._apply_anilist_media_list(media_id, media_list)
-                    self.anilist_log(
-                        f"[AniList] Rewatch recovered from ambiguous response: #{media_list.get('repeat') or 1}."
-                    )
-                    return True
+                    if self.media_generation == entry_gen:
+                        self._apply_anilist_media_list(media_id, media_list, entry_gen)
+                        self.anilist_log(
+                            f"[AniList] Rewatch recovered from ambiguous response: #{media_list.get('repeat') or 1}."
+                        )
+                        return True
             except Exception:
                 pass
             self.anilist_log(f"[AniList] Rewatch start failed: {exc}")
@@ -1876,8 +2119,13 @@ class RPCBackend:
         return None
 
 
-    def _resolve_anilist_identity(self, identity_key, title, episode_str):
+    def _resolve_anilist_identity(self, identity_key, title, episode_str, launch_generation=None):
         """Resolve one series identity once; this never runs from a sync call."""
+        if time.time() < self._anilist_backoff_until:
+            self.anilist_log("[AniList] Circuit open — backing off (resolve).")
+            with self._anilist_identity_lock:
+                self._anilist_identity_resolving.discard(identity_key)
+            return
         try:
             self.anilist_log(f"[AniList] Resolving identity: {title}")
             query = """
@@ -1967,10 +2215,27 @@ class RPCBackend:
                     f"({score}% - {reason})"
                 )
 
-            if (self.current_anilist_identity or {}).get("source_key") == identity_key:
-                self._apply_anilist_identity(identity)
+            if self._anilist_fail_count > 0:
+                self._set_health("anilist", "HEALTHY", "AniList request retried successfully")
+            self._anilist_fail_count = 0
+            self._anilist_backoff_until = 0.0
+
+            if launch_generation is not None and self.media_generation != launch_generation:
+                self.log(
+                    f"[ANILIST] Discarded stale identity: generation {launch_generation} "
+                    f"!= current generation {self.media_generation} (title='{title}')"
+                )
+            elif (self.current_anilist_identity or {}).get("source_key") == identity_key:
+                self._apply_anilist_identity(identity, launch_generation)
         except Exception as exc:
-            if (self.current_anilist_identity or {}).get("source_key") == identity_key:
+            self._anilist_fail_count += 1
+            backoff = min(30 * (2 ** self._anilist_fail_count), 3600)
+            self._anilist_backoff_until = time.time() + backoff
+            self._set_health("anilist", "DEGRADED", f"AniList identity API error: {exc}")
+            if (
+                (launch_generation is None or self.media_generation == launch_generation)
+                and (self.current_anilist_identity or {}).get("source_key") == identity_key
+            ):
                 identity = {
                     "source_key": identity_key,
                     "source_title": title,
@@ -1980,7 +2245,7 @@ class RPCBackend:
                     "confidence": 0.0,
                     "identity_version": ANILIST_IDENTITY_VERSION,
                 }
-                self._apply_anilist_identity(identity)
+                self._apply_anilist_identity(identity, launch_generation)
             self.anilist_log(f"[AniList] Identity API error: {exc}")
         finally:
             with self._anilist_identity_lock:
@@ -2027,9 +2292,11 @@ class RPCBackend:
             "confidence": 0.0,
             "identity_version": ANILIST_IDENTITY_VERSION,
         })
+        # Capture generation at spawn time so the resolver can discard stale results
+        _resolve_gen = self.media_generation
         threading.Thread(
             target=self._resolve_anilist_identity,
-            args=(identity_key, title, episode_str),
+            args=(identity_key, title, episode_str, _resolve_gen),
             daemon=True,
         ).start()
 
@@ -2041,6 +2308,9 @@ class RPCBackend:
         expected_key, _, _ = self._anilist_identity_key(
             title, self.state_data.get("episode_str", "")
         )
+        if time.time() < self._anilist_backoff_until:
+            self.anilist_log("[AniList] Circuit open — backing off.")
+            return False, "CURRENT"
         if (
             identity.get("source_key") != expected_key
             or identity.get("state") != "SYNCABLE"
@@ -2118,7 +2388,11 @@ class RPCBackend:
                 "progress": entry.get("progress", episode_num),
                 "repeat": entry.get("repeat") if entry.get("repeat") is not None else media_list.get("repeat", 0),
             })
-            self._apply_anilist_media_list(identity["anilist_id"], media_list)
+            self._apply_anilist_media_list(identity["anilist_id"], media_list, self.media_generation)
+            if self._anilist_fail_count > 0:
+                self._set_health("anilist", "HEALTHY", "AniList request retried successfully")
+            self._anilist_fail_count = 0
+            self._anilist_backoff_until = 0.0
             self.anilist_identity_cache[identity["source_key"]] = identity.copy()
             self.save_metadata_cache()
             self.anilist_log(
@@ -2129,7 +2403,10 @@ class RPCBackend:
             threading.Thread(target=self.force_sync_widget_v2, daemon=True).start()
             return True, entry.get("status", status)
         except Exception as exc:
-            self.anilist_log(f"[Error] AniList sync failed: {exc}")
+            self._anilist_fail_count += 1
+            backoff = min(30 * (2 ** self._anilist_fail_count), 3600)
+            self._anilist_backoff_until = time.time() + backoff
+            self._set_health("anilist", "DEGRADED", f"AniList sync failed: {exc}")
             return False, status
 
 
@@ -3001,6 +3278,9 @@ class RPCBackend:
 
         identity = self.current_anilist_identity or {}
         expected_key, _, _ = self._anilist_identity_key(title, ep_str)
+        if time.time() < self._anilist_backoff_until:
+            self.anilist_log("[AniList] Circuit open — backing off.")
+            return False, "CURRENT"
         if (
             identity.get("source_key") != expected_key
             or identity.get("state") != "SYNCABLE"
@@ -4092,6 +4372,8 @@ class RPCBackend:
 
 
                     self.log(f"[Snapshot] Uploaded scene snapshot: {url}")
+                    if self.state_data.get("health", {}).get("ffmpeg") != "HEALTHY":
+                        self._set_health("ffmpeg", "HEALTHY")
 
 
                 else:
@@ -4112,7 +4394,7 @@ class RPCBackend:
             # ffmpeg not on PATH — disable silently so we don't spam the log
 
 
-            self.log("[Snapshot] ffmpeg not found on PATH — scene snapshots disabled.")
+            self._set_health("ffmpeg", "UNAVAILABLE", "FFmpeg not found — scene snapshots disabled.")
 
 
             # Turn off the feature so we don't keep trying
@@ -4139,87 +4421,199 @@ class RPCBackend:
 
 
 
-    def load_metadata_cache(self):
+    # ─────────────────────────────────────────────────────────────────────────
+    # Metadata Cache Helpers
+    # ─────────────────────────────────────────────────────────────────────────
 
+    def _normalize_cache_key(self, s):
+        """Lowercase, strip punctuation, collapse whitespace for collision-resistant cache keys."""
+        import unicodedata
+        s = s.lower().strip()
+        # Remove common articles that differ between file names and API titles
+        s = re.sub(r'\b(the|a|an)\b', '', s)
+        # Keep alphanumeric and spaces only
+        s = re.sub(r'[^\w\s]', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
 
-        if getattr(sys, 'frozen', False):
-
-
-            application_path = os.path.dirname(sys.executable)
-
-
+    def _build_cache_key(self, media_type, cleaned_title, episode_str, artist=""):
+        """Build a normalized, collision-resistant cache key."""
+        norm = self._normalize_cache_key(cleaned_title)
+        if media_type == "music":
+            norm_artist = self._normalize_cache_key(artist) if artist else ""
+            return f"music:{norm}:{norm_artist}"
+        # Parse season/episode from episode_str for structured keys
+        se = re.search(r'Season\s*(\d+)\s*Episode\s*(\d+)', episode_str or "", re.IGNORECASE)
+        ep = re.search(r'Episode\s*(\d+)', episode_str or "", re.IGNORECASE)
+        if se:
+            s_num, e_num = se.group(1), se.group(2)
+        elif ep:
+            s_num, e_num = "1", ep.group(1)
         else:
+            s_num, e_num = None, None
+        if media_type == "anime":
+            if s_num and int(s_num) > 1:
+                return f"anime:{norm}:S{s_num}"
+            return f"anime:{norm}"
+        if media_type == "movie":
+            year_m = re.search(r'\((\d{4})\)', episode_str or "")
+            year = year_m.group(1) if year_m else ""
+            return f"movie:{norm}:{year}"
+        if media_type == "tv_show":
+            if s_num and e_num:
+                return f"tvshow:{norm}:S{s_num}E{e_num}"
+            return f"tvshow:{norm}"
+        # Fallback
+        return f"{media_type}:{norm}"
 
+    def _is_valid_cache_entry(self, entry):
+        """
+        Return True only if this cache entry is usable.
+        Negative markers are valid (caller decides how to handle them).
+        """
+        if not isinstance(entry, dict):
+            return False
+        # Version check — reject old schema entries
+        ver = entry.get("_cache_version")
+        if ver is not None and ver != METADATA_CACHE_VERSION:
+            return False
+        # Negative marker: valid but signals failure
+        if entry.get("_negative"):
+            return True
+        # Real metadata: must have at least a title
+        if not (entry.get("title") or entry.get("official_title")):
+            return False
+        return True
 
+    def _is_negative_expired(self, entry):
+        """Return True if a negative cache marker is old enough to retry (1 hour)."""
+        ts = entry.get("_negative_ts", 0)
+        return (time.time() - ts) > 3600
+
+    def _merge_metadata(self, base, update):
+        """
+        Merge update dict into base dict. Only overwrite a field if:
+          - the new value is not None
+          - the new value is not an empty string / empty list
+        This prevents a provider returning None from erasing a valid cover/rating.
+        """
+        if not base:
+            return dict(update) if update else {}
+        if not update:
+            return dict(base)
+        merged = dict(base)
+        for k, v in update.items():
+            if v is None:
+                continue
+            if isinstance(v, str) and not v.strip():
+                continue
+            if isinstance(v, list) and not v:
+                continue
+            merged[k] = v
+        return merged
+
+    def _get_cache_path(self):
+        """Return the resolved metadata cache file path."""
+        if getattr(sys, 'frozen', False):
+            application_path = os.path.dirname(sys.executable)
+        else:
             application_path = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(application_path, CACHE_FILE)
 
-
-        cache_path = os.path.join(application_path, CACHE_FILE)
-
-
-        
-
-
+    def load_metadata_cache(self):
+        if hasattr(self, "state_data") and "health" in self.state_data:
+            self.state_data["health"]["cache"] = "HEALTHY"
+        cache_path = self._get_cache_path()
         if not os.path.exists(cache_path):
-
-
             return {}
 
-
+        # Read raw bytes first — if file is empty or truncated, handle gracefully
         try:
-
-
-            with open(cache_path, "r") as f:
-
-
-                return json.load(f)
-
-
-        except Exception:
-
-
+            raw = open(cache_path, "r", encoding="utf-8").read().strip()
+        except Exception as e:
+            self.log(f"[RECOVERY] Metadata cache repaired — could not read file: {e}")
+            if hasattr(self, "state_data") and "health" in self.state_data: self.state_data["health"]["cache"] = "REPAIRED"
             return {}
+
+        if not raw:
+            self.log("[RECOVERY] Metadata cache repaired — file was empty")
+            if hasattr(self, "state_data") and "health" in self.state_data: self.state_data["health"]["cache"] = "REPAIRED"
+            return {}
+
+        # Parse JSON
+        try:
+            data = json.loads(raw)
+        except Exception as e:
+            self.log(f"[RECOVERY] Metadata cache repaired — JSON parse failed ({e}); backing up bad file")
+            if hasattr(self, "state_data") and "health" in self.state_data: self.state_data["health"]["cache"] = "REPAIRED"
+            try:
+                bak = cache_path + ".bak"
+                import shutil
+                shutil.copy2(cache_path, bak)
+            except Exception:
+                pass
+            return {}
+
+        if not isinstance(data, dict):
+            self.log("[RECOVERY] Metadata cache repaired — root was not a dict")
+            if hasattr(self, "state_data") and "health" in self.state_data: self.state_data["health"]["cache"] = "REPAIRED"
+            return {}
+
+        # Migrate: strip entries with incompatible schema versions
+        cleaned = {}
+        migrated_count = 0
+        for k, v in data.items():
+            # Always keep the AniList identity block — it has its own versioning
+            if k == ANILIST_IDENTITY_CACHE_KEY:
+                cleaned[k] = v
+                continue
+            if not isinstance(v, dict):
+                migrated_count += 1
+                continue
+            entry_ver = v.get("_cache_version")
+            if entry_ver is not None and entry_ver != METADATA_CACHE_VERSION:
+                migrated_count += 1
+                continue
+            cleaned[k] = v
+
+        if migrated_count:
+            self.log(f"[METADATA] Cache migrated — discarded {migrated_count} old-schema entries")
+
+        return cleaned
 
 
 
 
 
     def save_metadata_cache(self):
+        """Write metadata cache atomically using a temp file + os.replace."""
+        cache_path = self._get_cache_path()
+        tmp_path = cache_path + ".tmp"
 
+        with self._metadata_cache_lock:
+            # Snapshot dict to avoid mutation-during-serialization
+            snap = dict(self.metadata_cache)
 
-        if getattr(sys, 'frozen', False):
+        # Stamp each real entry with the current cache version
+        for k, v in snap.items():
+            if isinstance(v, dict) and k != ANILIST_IDENTITY_CACHE_KEY:
+                v["_cache_version"] = METADATA_CACHE_VERSION
 
-
-            application_path = os.path.dirname(sys.executable)
-
-
-        else:
-
-
-            application_path = os.path.dirname(os.path.abspath(__file__))
-
-
-        cache_path = os.path.join(application_path, CACHE_FILE)
-
-
-        # Keep AniList identity records beside legacy metadata entries so existing
-        # cache files remain valid and are upgraded lazily.
-        self.metadata_cache[ANILIST_IDENTITY_CACHE_KEY] = self.anilist_identity_cache
-
+        # Keep AniList identity records alongside metadata
+        snap[ANILIST_IDENTITY_CACHE_KEY] = dict(self.anilist_identity_cache)
 
         try:
-
-
-            with open(cache_path, "w") as f:
-
-
-                json.dump(self.metadata_cache, f, indent=4)
-
-
-        except Exception:
-
-
-            pass
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(snap, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, cache_path)
+        except Exception as e:
+            self.log(f"[METADATA] Cache save failed: {e}")
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 
@@ -4230,9 +4624,12 @@ class RPCBackend:
 
     def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist, input_uri="", media_type_hint=""):
 
-
         """Fetch metadata in a background thread so the main loop stays fast."""
 
+        # Capture the generation at launch time. If the user changes tracks
+        # before providers finish, we discard the result instead of caching
+        # wrong metadata under this key.
+        entry_generation = getattr(self, 'media_generation', 0)
 
         try:
 
@@ -4531,32 +4928,30 @@ class RPCBackend:
 
 
 
+            # ── Generation guard (primary) ─────────────────────────────────────
+            # Covers the same-file/different-session race:
+            # Generation N:  file A starts → metadata worker launched.
+            # Generation N+1: same file A stopped and restarted.
+            # Without this guard, still_same_file would pass (input_uri is
+            # identical) and the stale Gen-N result would overwrite Gen-N+1 state.
+            if self.media_generation != entry_generation:
+                self.log(
+                    f"[METADATA] Discarded stale result: generation {entry_generation} "
+                    f"!= current generation {self.media_generation} "
+                    f"(title='{cleaned_title}')"
+                )
+                return
+
+            # ── File-URI guard (secondary) ────────────────────────────────────────
             # Only apply metadata if the user is still on the same file.
-
-
             # Use input_uri (the file path) rather than rebuilding current_key from
-
-
             # volatile state — this prevents the race where track_key has moved on
-
-
             # but input_uri hasn't changed (same file, title just got resolved by Gemini).
-
-
             still_same_file = (
-
-
                 not input_uri  # backwards compat: old calls without input_uri always apply
-
-
                 or self.state_data.get("_last_art_key", "") == input_uri
-
-
                 or self.state_data.get("_last_art_uri", "") == input_uri
-
-
             )
-
 
             if still_same_file:
 
@@ -4601,6 +4996,9 @@ class RPCBackend:
 
 
                 self.log(f"[Metadata] Applied metadata for '{self.state_data.get('cleaned_title', cleaned_title)}'")
+                if cache_key in self._metadata_neg_cache:
+                    del self._metadata_neg_cache[cache_key]
+                    self._set_health("metadata", "HEALTHY", "Metadata fetching restored")
 
 
 
@@ -4609,15 +5007,15 @@ class RPCBackend:
             else:
 
 
-                self.log(f"[Metadata] Discarded stale metadata (file changed)")
+                self.log(f"[STATE] Discarded stale metadata fetch for '{search_title}' (generation changed)")
 
 
         except Exception as e:
 
 
-            self.log(f"[Metadata] FETCH FAILED: {e}")
-
-
+            fail_count = self._metadata_neg_cache.get(cache_key, (0, 0))[1] + 1
+            self._metadata_neg_cache[cache_key] = (time.time(), fail_count)
+            self._set_health("metadata", "DEGRADED", f"Metadata fetch cascade failed ({e}) — negative cache active")
             self.state_data["status_message"] = f"Metadata fetch failed: {e}"
 
 
@@ -4627,25 +5025,18 @@ class RPCBackend:
 
 
 
+    def _set_health(self, subsystem, status, message=None):
+        self.state_data.setdefault("health", {})[subsystem] = status
+        if message:
+            self.log(f"[RECOVERY] {message}")
+
     def rpc_worker(self):
 
 
         asyncio.set_event_loop(asyncio.new_event_loop())
 
 
-        rpc = None
-
-
-        current_client_id = None
-
-
         last_track_key = None
-
-
-        rpc_backoff = 1          # seconds to wait before next reconnect attempt
-
-
-        rpc_reconnect_at = 0.0   # earliest epoch time allowed for a reconnect
 
 
         
@@ -4687,6 +5078,8 @@ class RPCBackend:
                     vlc_data = r.json()
 
 
+                    if not self.state_data.get("vlc_connected"):
+                        self._set_health("vlc", "HEALTHY", "VLC connection restored")
                     self.state_data["vlc_connected"] = True
 
 
@@ -5059,36 +5452,44 @@ class RPCBackend:
                             self.gemini_cache[raw_name] = "pending"
 
 
-                            def _run_gemini(name, key):
+                            # Default-arg trick captures launch_generation at definition time
+                            # (Python closure semantics) — not at call time.
+                            def _run_gemini(name, key, _launch_gen=self.media_generation):
 
 
                                 t, e, mt = media_identity_to_display(query_gemini_title(name, key))
 
 
                                 if t:
+                                    # Generation guard: discard if media changed while Gemini was resolving
+                                    if self.media_generation != _launch_gen:
+                                        self.log(
+                                            f"[STATE] Discarded stale Gemini result for '{name}' "
+                                            f"(gen {_launch_gen} -> {self.media_generation})"
+                                        )
+                                        return
 
 
                                     self.gemini_cache[name] = (t, e, mt or "")
 
 
                                     self.anilist_log(f"[Gemini AI] Match: {t} {e}")
+                                    if self.state_data.get("health", {}).get("gemini") != "HEALTHY":
+                                        self._set_health("gemini", "HEALTHY")
 
 
                                     try:
-
-
-                                        import json
-
-
-                                        with open(self.gemini_cache_file, 'w', encoding='utf-8') as gcf:
-
-
-                                            json.dump(self.gemini_cache, gcf)
-
-
+                                        _gc_tmp = self.gemini_cache_file + '.tmp'
+                                        with self._gemini_cache_lock:
+                                            _gc_snap = {k: list(v) if isinstance(v, tuple) else v
+                                                        for k, v in self.gemini_cache.items()
+                                                        if v is not None and v != 'pending'}
+                                        with open(_gc_tmp, 'w', encoding='utf-8') as gcf:
+                                            json.dump(_gc_snap, gcf, ensure_ascii=False)
+                                            gcf.flush()
+                                            os.fsync(gcf.fileno())
+                                        os.replace(_gc_tmp, self.gemini_cache_file)
                                     except Exception:
-
-
                                         pass
 
 
@@ -5104,7 +5505,7 @@ class RPCBackend:
                                     self.gemini_fail_times[name] = time.time()
 
 
-                                    self.anilist_log(f"[Gemini AI] Failed to resolve title. (Auto-retry in 1h)")
+                                    self._set_health("gemini", "DEGRADED", "Gemini unavailable; using deterministic parser")
 
 
                             threading.Thread(target=_run_gemini, args=(raw_name, gemini_key), daemon=True).start()
@@ -5313,6 +5714,33 @@ class RPCBackend:
                         self.last_watched_music = is_music
 
 
+                        # ── Media session boundary ────────────────────────────
+                        # Log the end of the previous session before bumping generation
+                        _prev_title = self.state_data.get("cleaned_title") or self.state_data.get("title", "?")
+                        self.log(f"[MEDIA] Session {self.media_generation} ended: {_prev_title}")
+
+                        # Prevent AniList/rewatch state from leaking across media.
+                        # _rewatch_generation=-1 immediately invalidates any in-flight
+                        # async writers that complete after this point.
+                        self.state_data["watch_mode"] = "NORMAL"
+                        self.state_data["rewatch_number"] = 0
+                        self.state_data["possible_rewatch"] = False
+                        self.state_data["rewatch_starting"] = False
+                        self.state_data["_rewatch_generation"] = -1
+                        self.state_data["anilist_identity"] = None
+                        self.state_data["anilist_identity_state"] = "UNKNOWN"
+                        self.current_anilist_identity = None
+
+                        # Bump generation so DiscordManager and metadata workers
+                        # drop any results from the previous session.
+                        self.media_generation += 1
+                        self.log(f"[MEDIA] Session {self.media_generation} started: {cleaned_title} {episode_str}")
+                        self.log(f"[REWATCH] State reset for session {self.media_generation}")
+
+
+
+
+
 
 
 
@@ -5325,7 +5753,10 @@ class RPCBackend:
                             self.state_data["episode_str"] = episode_str
 
 
-                            cache_key = f"{media_type}:{cleaned_title}:{self.state_data['artist']}" if is_music else f"{media_type}:{cleaned_title}:{episode_str}"
+                            cache_key = self._build_cache_key(
+                                media_type, cleaned_title, episode_str,
+                                artist=self.state_data.get('artist', '') if is_music else ''
+                            )
 
 
 
@@ -5384,23 +5815,46 @@ class RPCBackend:
 
                             else:
 
+                                # Check for a non-expired negative cache marker before spawning
+                                _neg_entry = self.metadata_cache.get(cache_key)
+                                _is_neg = isinstance(_neg_entry, dict) and _neg_entry.get('_negative')
+                                _neg_expired = self._is_negative_expired(_neg_entry) if _is_neg else True
 
-                                self.state_data["metadata"] = None
+                                _dyn_neg = self._metadata_neg_cache.get(cache_key)
+                                _dyn_is_neg = False
+                                if _dyn_neg:
+                                    _dyn_fail_time, _dyn_fail_count = _dyn_neg
+                                    _dyn_cooldown = min(60 * (2 ** (_dyn_fail_count - 1)), 1800)
+                                    if time.time() - _dyn_fail_time < _dyn_cooldown:
+                                        _dyn_is_neg = True
+                                    else:
+                                        del self._metadata_neg_cache[cache_key]
+
+                                if (_is_neg and not _neg_expired) or _dyn_is_neg:
+                                    # All providers failed recently; wait for the TTL to expire
+                                    if not getattr(self, "_last_neg_cache_log", None) == cache_key:
+                                        self.log(f"[Metadata] Skipping fetch for '{cleaned_title}' — negative cache active")
+                                        self._last_neg_cache_log = cache_key
+                                    self.state_data["metadata"] = None
+                                    self.state_data["local_image_path"] = None
+                                    self.state_data["status_message"] = "No metadata found."
+                                else:
+                                    self.state_data["metadata"] = None
 
 
-                                self.state_data["local_image_path"] = None
+                                    self.state_data["local_image_path"] = None
 
 
-                                self.state_data["status_message"] = "Fetching metadata..."
+                                    self.state_data["status_message"] = "Fetching metadata..."
 
 
-                                self.log(f"Playing '{cleaned_title}' (Fetching metadata...)")
+                                    self.log(f"Playing '{cleaned_title}' (Fetching metadata...)")
 
 
-                                fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], art_identity, media_type)
+                                    fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], art_identity, media_type)
 
 
-                                threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
+                                    threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
 
 
                         else:
@@ -5467,6 +5921,7 @@ class RPCBackend:
 
 
                     self.log("VLC connection lost.")
+                    self._set_health("vlc", "DISCONNECTED")
 
 
                 # VLC is unreachable — mark disconnected and hibernate briefly
@@ -5505,22 +5960,19 @@ class RPCBackend:
                 self.state_data["scene_snapshot_url"] = ""
 
 
+                self.discord_manager.clear_activity(self.media_generation)
                 time.sleep(5)
-
-
-                # Fall through to Discord reconnect logic below
+                continue
 
 
             except Exception as e:
-
-
-                pass
 
 
                 if self.state_data.get("vlc_connected"):
 
 
                     self.log(f"VLC error: {e}")
+                    self._set_health("vlc", "DISCONNECTED")
 
 
                 self.state_data["vlc_connected"] = False
@@ -5556,840 +6008,149 @@ class RPCBackend:
                 self.state_data["scene_snapshot_url"] = ""
 
 
+                self.discord_manager.clear_activity(self.media_generation)
+                continue
+
+
 
 
 
             desired_client_id = self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID
 
-
-
-
-
-            if rpc and current_client_id != desired_client_id:
-
-
+            if not getattr(self, 'rpc_enabled', True) or not self.state_data.get("vlc_connected") or self.state_data.get("playback_state") not in ["playing", "paused"]:
+                self.discord_manager.clear_activity(self.media_generation)
+            else:
                 try:
-
-
-                    rpc.close()
-
-
-                except Exception:
-
-
-                    pass
-
-
-                rpc = None
-
-
-                self.state_data["rpc_connected"] = False
-
-
-                self.log(f"Closing Discord RPC (Client ID changed to {desired_client_id})")
-
-
-
-
-
-            if not rpc and time.time() >= rpc_reconnect_at:
-
-
-                try:
-
-
-                    rpc = Presence(desired_client_id)
-
-
-                    rpc.connect()
-
-
-                    current_client_id = desired_client_id
-
-
-                    self.state_data["rpc_connected"] = True
-
-
-                    self.state_data["status_message"] = "Connected to Discord."
-
-
-                    self.log(f"Connected to Discord RPC (Client ID: {desired_client_id})")
-
-
-                    show_toast("VLC RPC", "Connected to Discord!", icon="success")
-
-
-                    rpc_backoff = 1       # reset on successful connect
-
-
-                    rpc_reconnect_at = 0.0
-
-
-                except Exception:
-
-
-                    rpc = None
-
-
-                    current_client_id = None
-
-
-                    if self.state_data.get("rpc_connected", True):
-
-
-                        self.log("Discord not found — retrying...")
-
-
-                    self.state_data["rpc_connected"] = False
-
-
-                    self.state_data["status_message"] = "Discord not found — retrying..."
-
-
-                    rpc_reconnect_at = time.time() + rpc_backoff
-
-
-                    rpc_backoff = min(rpc_backoff * 2, 30)  # exponential backoff, cap 30 s
-
-
-
-
-
-            if rpc and self.state_data["rpc_connected"]:
-
-
-                if not getattr(self, 'rpc_enabled', True) or not self.state_data["vlc_connected"] or self.state_data["playback_state"] not in ["playing", "paused"]:
-
-
-                    if not getattr(self, "_last_rpc_cleared", False):
-
-
-                        try:
-
-
-                            rpc.clear()
-
-
-                            self._last_rpc_cleared = True
-
-
-                            self._last_rpc_kwargs = {}
-
-
-                        except Exception:
-
-
-                            pass
-
-
-                else:
-
-
-                    self._last_rpc_cleared = False
-
-
-                    try:
-
-
-                        kwargs = {}
-
-
-                        media_type = self.state_data.get("media_type", "movie")
-
-
-
-
-
-                        # Contextual Discord Activity Mapping
-
-
-                        if media_type == "music":
-
-
-                            kwargs["activity_type"] = ActivityType.LISTENING
-
-
-                            kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
-
-
-                            kwargs["state"] = f"by {self.state_data.get('artist', 'Unknown')}"
-
-
-                            kwargs["large_text"] = f"Album: {self.state_data.get('album', 'Unknown')}"
-
-
-                        elif media_type == "movie":
-
-
-                            kwargs["activity_type"] = ActivityType.WATCHING
-
-
-                            kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
-
-
-                            _meta = self.state_data.get("metadata") or {}
-
-
-                            genres = _meta.get("genres", [])
-
-
-                            if isinstance(genres, list):
-
-
-                                genres = [g for g in genres if g.lower() not in ("anime", "animation")]
-
-
-                                genre_str = ", ".join(genres[:3])
-
-
-                            else:
-
-
-                                genre_str = str(genres)
-
-
-                            rating = _meta.get("rating") or _meta.get("imdb_rating") or ""
-
-
-                            if rating:
-
-
-                                try:
-
-
-                                    rating = str(round(float(rating), 1))
-
-
-                                except (ValueError, TypeError):
-
-
-                                    rating = str(rating)
-
-
-                                    
-
-
-                            if rating and genre_str:
-
-
-                                kwargs["state"] = f"{genre_str} | ⭐ {rating}"
-
-
-                            elif genre_str:
-
-
-                                kwargs["state"] = f"Genres: {genre_str}"
-
-
-                            elif rating:
-
-
-                                kwargs["state"] = f"⭐ {rating}"
-
-
-
-
-
-                            desc = self.state_data.get("metadata", {}).get("description", "") if self.state_data.get("metadata") else ""
-
-
-                            kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + (f" • {desc}" if desc else "")
-
-
+                    kwargs = {}
+                    media_type = self.state_data.get("media_type", "movie")
+
+                    # Contextual Discord Activity Mapping
+                    if media_type == "music":
+                        kwargs["activity_type"] = ActivityType.LISTENING
+                        kwargs["details"] = self.state_data.get("cleaned_title", self.state_data.get("title", ""))
+                        kwargs["state"] = f"by {self.state_data.get('artist', 'Unknown')}"
+                        kwargs["large_text"] = f"Album: {self.state_data.get('album', 'Unknown')}"
+                    elif media_type == "movie":
+                        kwargs["activity_type"] = ActivityType.WATCHING
+                        kwargs["details"] = self.state_data.get("cleaned_title", self.state_data.get("title", ""))
+                        _meta = self.state_data.get("metadata") or {}
+                        genres = _meta.get("genres", [])
+                        if isinstance(genres, list):
+                            genres = [g for g in genres if g.lower() not in ("anime", "animation")]
+                            genre_str = ", ".join(genres[:3])
                         else:
-
-
-                            # tv_show or anime
-
-
-                            kwargs["activity_type"] = ActivityType.WATCHING
-                            watch_mode = self.state_data.get("watch_mode", "NORMAL")
-                            cleaned_title = self.state_data.get("cleaned_title", self.state_data["title"])
-                            kwargs["details"] = f"↻ Rewatching {cleaned_title}" if watch_mode == "REWATCH" else cleaned_title
-
-
-
-
-
-                            ep_str = self.state_data.get("episode_str", "")
-
-
-                            _meta = self.state_data.get("metadata") or {}
-
-
-                            rating = _meta.get("episode_rating") or _meta.get("rating") or _meta.get("imdb_rating") or ""
-
-
-                            # Format rating: Jikan gives float (8.5), TVMaze gives float too
-
-
-                            if rating:
-
-
-                                try:
-
-
-                                    rating = str(round(float(rating), 1))
-
-
-                                except (ValueError, TypeError):
-
-
-                                    rating = str(rating)
-
-
-                            rating_str = f" | ⭐ {rating}" if rating else ""
-                            if watch_mode == "REWATCH":
-                                state_str = f"{ep_str} | Rewatch #{self.state_data.get('rewatch_number', 1)}{rating_str}"
-                            else:
-                                state_str = f"{ep_str}{rating_str}"
-
-
-                            if self.state_data["playback_state"] == "paused":
-
-
-                                kwargs["state"] = f"Paused | {state_str}" if state_str else "Paused"
-
-
-                            else:
-
-
-                                kwargs["state"] = state_str
-
-
-
-
-
-                            genres = _meta.get("genres", [])
-
-
-                            if isinstance(genres, list):
-
-
-                                genres = [g for g in genres if g.lower() not in ("anime", "animation")]
-
-
-                                genre_str = ", ".join(genres[:3])
-
-
-                            else:
-
-
-                                genre_str = ""
-
-
-                            kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + (f" • {genre_str}" if genre_str else "")
-
-
-
-
-
-                        # Assets — ensure_https() forces https:// so Discord accepts the URL.
-
-
-                        # (Discord silently ignores http:// poster URLs, showing the VLC logo instead.)
-
-
-                        if self.state_data["metadata"] and self.state_data["metadata"].get("image_url"):
-
-
-                            kwargs["large_image"] = ensure_https(self.state_data["metadata"]["image_url"])
-
-
+                            genre_str = str(genres)
+                        rating = _meta.get("rating") or _meta.get("imdb_rating") or ""
+                        if rating:
+                            try:
+                                rating = str(round(float(rating), 1))
+                            except (ValueError, TypeError):
+                                rating = str(rating)
+                        if rating and genre_str:
+                            kwargs["state"] = f"{genre_str} | ⭐ {rating}"
+                        elif genre_str:
+                            kwargs["state"] = f"Genres: {genre_str}"
+                        elif rating:
+                            kwargs["state"] = f"⭐ {rating}"
+                        desc = self.state_data.get("metadata", {}).get("description", "") if self.state_data.get("metadata") else ""
+                        kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data.get("title", "")) + (f" • {desc}" if desc else "")
+                    else:
+                        kwargs["activity_type"] = ActivityType.WATCHING
+                        watch_mode = self.state_data.get("watch_mode", "NORMAL")
+                        # Generation guard: ignore stale rewatch state from previous session
+                        if self.state_data.get("_rewatch_generation", -1) != self.media_generation:
+                            watch_mode = "NORMAL"
+                        cleaned_title = self.state_data.get("cleaned_title", self.state_data.get("title", ""))
+                        kwargs["details"] = f"\u21bb Rewatching {cleaned_title}" if watch_mode == "REWATCH" else cleaned_title
+
+                        ep_str = self.state_data.get("episode_str", "")
+                        _meta = self.state_data.get("metadata") or {}
+                        rating = _meta.get("episode_rating") or _meta.get("rating") or _meta.get("imdb_rating") or ""
+                        if rating:
+                            try:
+                                rating = str(round(float(rating), 1))
+                            except (ValueError, TypeError):
+                                rating = str(rating)
+                        rating_str = f" | ⭐ {rating}" if rating else ""
+                        if watch_mode == "REWATCH":
+                            _rw_num = self.state_data.get("rewatch_number", 1) if self.state_data.get("_rewatch_generation", -1) == self.media_generation else 1
+                            state_str = f"{ep_str} | Rewatch #{_rw_num}{rating_str}"
                         else:
-
-
-                            kwargs["large_image"] = self.config.get("large_image_key", "vlc")
-
-
-
-
-
-                        # Scene Snapshot override: replace poster with live video frame if available
-
-
-                        snapshot_url = self.state_data.get("scene_snapshot_url", "")
-
-
-                        if self.config.get("scene_snapshots") and snapshot_url:
-
-
-                            kwargs["large_image"] = snapshot_url
-
-
-
-
-
-                        # Trigger a new scene snapshot if due.
-
-
-                        # First snapshot for a new file fires after 30s.
-
-
-                        # Subsequent snapshots of the same file refresh every 5 minutes.
-
-
-                        if (
-
-
-                            self.config.get("scene_snapshots")
-
-
-                            and media_type != "music"
-
-
-                            and self.state_data["playback_state"] == "playing"
-
-
-                        ):
-
-
-                            time_secs = self.state_data.get("time", 0)
-
-
-
-
-
-                            # Resolve the file path for the current playlist item.
-
-
-                            # VLC's meta.url is often empty for local files, so we
-
-
-                            # look up the URI in /requests/playlist.json by currentplid.
-
-
-                            local_path = getattr(self, '_snapshot_local_path', '')
-
-
-                            snap_plid  = getattr(self, '_snapshot_plid', '')
-
-
-                            if current_plid != snap_plid:
-
-
-                                # currentplid changed — find the URI from the playlist
-
-
-                                try:
-
-
-                                    pl_url = f"http://{self.config.get('vlc_host','localhost')}:{self.config.get('vlc_port',8080)}/requests/playlist.json"
-
-
-                                    pl_r = requests.get(pl_url, auth=HTTPBasicAuth('', self.config.get('vlc_password', '')), timeout=3)
-
-
-                                    pl_r.encoding = 'utf-8'
-
-
-                                    if pl_r.status_code == 200:
-
-
-                                        def _find_uri(node, plid):
-
-
-                                            if str(node.get("id", "")) == plid:
-
-
-                                                return node.get("uri", "")
-
-
-                                            for child in node.get("children", []):
-
-
-                                                result = _find_uri(child, plid)
-
-
-                                                if result:
-
-
-                                                    return result
-
-
-                                            return ""
-
-
-                                        found_uri = _find_uri(pl_r.json(), current_plid)
-
-
-                                        new_path = ""
-
-
-                                        if found_uri.startswith("file:///"):
-
-
-                                            new_path = urllib.parse.unquote(found_uri[8:]).replace("/", os.sep)
-
-
-                                        elif found_uri.startswith("file://localhost/"):
-
-
-                                            new_path = urllib.parse.unquote(found_uri[17:]).replace("/", os.sep)
-
-
-                                        self._snapshot_local_path = new_path
-
-
-                                        self._snapshot_plid = current_plid
-
-
-                                        local_path = new_path
-
-
-                                        self.log(f"[Snapshot] Resolved file path: {new_path or '(empty)'}")
-
-
-                                        # Reset snapshot timer for new file
-
-
-                                        self._last_snapshot_time = 0
-
-
-                                        self.state_data["scene_snapshot_url"] = ""
-
-
-                                except Exception as _pl_e:
-
-
-                                    self.log(f"[Snapshot] Could not resolve file path: {_pl_e}")
-
-
-
-
-
-                            # Reset timer when we detect a new file
-
-
-                            last_snap_file = getattr(self, '_last_snapshot_file', '')
-
-
-                            if local_path and local_path != last_snap_file:
-
-
-                                self._last_snapshot_file = local_path
-
-
-                                self._last_snapshot_time = 0  # force a snapshot soon
-
-
-
-
-
-                            # First snap: 30s after file starts; subsequent: every 5 minutes
-
-
-                            interval = 30 if not self.state_data.get("scene_snapshot_url") else 300
-
-
-                            if (
-
-
-                                local_path and os.path.isfile(local_path)
-
-
-                                and time_secs > 30
-
-
-                                and time.time() - self._last_snapshot_time >= interval
-
-
-                            ):
-
-
-                                self._last_snapshot_time = time.time()
-
-
-                                threading.Thread(
-
-
-                                    target=self._capture_scene_snapshot,
-
-
-                                    args=(local_path, time_secs),
-
-
-                                    daemon=True
-
-
-                                ).start()
-
-
-
-
-
-                        play_key = self.config.get("small_image_key", "play")
-
-
-                        pause_key = self.config.get("small_image_paused_key", "pause")
-
-
-                        if play_key == "play": play_key = "https://iili.io/C2mXIp4.png"
-
-
-                        if pause_key == "pause": pause_key = "https://iili.io/C2mXAj2.png"
-
-
-
-
-
-                        if self.state_data["playback_state"] == "playing":
-
-
-                            kwargs["small_image"] = play_key
-
-
-                            kwargs["small_text"] = "Playing"
-
-
-                            if self.state_data.get("time", 0) > 0:
-
-
-                                kwargs["start"] = int(time.time()) - self.state_data["time"]
-
-
+                            state_str = f"{ep_str}{rating_str}"
+                        if self.state_data.get("playback_state") == "paused":
+                            kwargs["state"] = f"Paused | {state_str}" if state_str else "Paused"
                         else:
-
-
-                            kwargs["small_image"] = pause_key
-
-
-                            kwargs["small_text"] = "Paused"
-
-
-
-
-
-                        if self.state_data["playback_state"] == "playing" and self.state_data["length"] > 0:
-
-
-                            current_time = int(time.time())
-
-
-                            kwargs["start"] = current_time - self.state_data["time"]
-
-
-                            kwargs["end"] = kwargs["start"] + self.state_data["length"]
-
-
-
-
-
-                        # â”€â”€ Discord Interaction Buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
-                        # Discord max = 2 buttons. Layout:
-
-
-                        #   Button 1: "Watch Trailer"  (YouTube search — always shown for non-music)
-
-
-                        #   Button 2: "My AniList"     if AniList connected
-
-
-                        #             "View on AniList" for anime with anilistId  (fallback)
-
-
-                        #             "View on IMDb"    for movies                (fallback)
-
-
-                        # Use `or {}` guard: state_data["metadata"] is None when loading.
-
-
-                        buttons = []
-
-
-                        _btn_meta = self.state_data.get("metadata") or {}
-
-
-                        display_title = self.state_data.get("cleaned_title") or self.state_data.get("title", "")
-
-
-
-
-
-                        # Button 1 — Watch Trailer (non-music only)
-
-
-                        if media_type != "music" and display_title:
-
-
-                            trailer_query = urllib.parse.quote(f"{display_title} official trailer")
-
-
-                            buttons.append({
-
-
-                                "label": "Watch Trailer",
-
-
-                                "url": f"https://www.youtube.com/results?search_query={trailer_query}"
-
-
-                            })
-
-
-
-
-
-                        # Button 2 — AniList profile (if connected) or content-specific link
-
-
-                        anilist_username = self.fetch_anilist_username()
-
-
-                        if anilist_username:
-
-
-                            buttons.append({
-
-
-                                "label": "My AniList Profile",
-
-
-                                "url": f"https://anilist.co/user/{urllib.parse.quote(anilist_username)}/"
-
-
-                            })
-
-
+                            kwargs["state"] = state_str
+                        
+                        genres = _meta.get("genres", [])
+                        if isinstance(genres, list):
+                            genres = [g for g in genres if g.lower() not in ("anime", "animation")]
+                            genre_str = ", ".join(genres[:3])
                         else:
-
-
-                            anilist_id = _btn_meta.get("anilistId")
-
-
-                            if media_type == "anime" and anilist_id:
-
-
-                                buttons.append({"label": "View on AniList", "url": f"https://anilist.co/anime/{anilist_id}"})
-
-
-                            elif media_type == "movie" and _btn_meta.get("page_url"):
-
-
-                                buttons.append({"label": "View on IMDb", "url": _btn_meta["page_url"]})
-
-
-                            elif media_type == "tv_show" and _btn_meta.get("page_url"):
-
-
-                                buttons.append({"label": "View on TVmaze", "url": _btn_meta["page_url"]})
-
-
-
-
-
-                        if buttons:
-
-
-                            kwargs["buttons"] = buttons
-
-
-
-
-
-                        def _is_significant_change(old, new):
-
-
-                            if not old: return True
-
-
-                            if set(old.keys()) != set(new.keys()): return True
-
-
-                            for k, v in new.items():
-
-
-                                if k in ['start', 'end'] and isinstance(v, (int, float)):
-
-
-                                    old_v = old.get(k)
-
-
-                                    if not isinstance(old_v, (int, float)) or abs(v - old_v) > 3:
-
-
-                                        return True
-
-
-                                elif old.get(k) != v:
-
-
-                                    return True
-
-
-                            return False
-
-
-
-
-
-                        last_kwargs = getattr(self, "_last_rpc_kwargs", {})
-
-
-                        if _is_significant_change(last_kwargs, kwargs):
-
-
-                            now = time.time()
-
-
-                            last_update = getattr(self, "_last_rpc_update_time", 0)
-
-
-                            # Discord IPC strictly rate-limits updates (usually max 1 per 15s).
-
-
-                            # Buffering it to 5s is a good balance and prevents dropping connections.
-
-
-                            if now - last_update >= 5:
-
-
-                                rpc.update(**kwargs)
-
-
-                                self._last_rpc_kwargs = kwargs.copy()
-
-
-                                self._last_rpc_update_time = now
-
-
-                    except Exception:
-
-
-                        # RPC update failed — close and schedule reconnect with backoff
-
-
-                        try:
-
-
-                            rpc.close()
-
-
-                        except Exception:
-
-
-                            pass
-
-
-                        rpc = None
-
-
-                        current_client_id = None
-
-
-                        self.state_data["rpc_connected"] = False
-
-
-                        rpc_reconnect_at = time.time() + rpc_backoff
-
-
-                        rpc_backoff = min(rpc_backoff * 2, 30)
-
-
-
-
+                            genre_str = ""
+                        kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data.get("title", "")) + (f" • {genre_str}" if genre_str else "")
+
+                    # Assets
+                    if self.state_data.get("metadata") and self.state_data["metadata"].get("image_url"):
+                        kwargs["large_image"] = ensure_https(self.state_data["metadata"]["image_url"])
+                    else:
+                        kwargs["large_image"] = self.config.get("large_image_key", "vlc")
+                    
+                    snapshot_url = self.state_data.get("scene_snapshot_url", "")
+                    if self.config.get("scene_snapshots") and snapshot_url:
+                        kwargs["large_image"] = snapshot_url
+
+                    play_key = self.config.get("small_image_key", "play")
+                    pause_key = self.config.get("small_image_paused_key", "pause")
+                    if play_key == "play": play_key = "https://iili.io/C2mXIp4.png"
+                    if pause_key == "pause": pause_key = "https://iili.io/C2mXAj2.png"
+
+                    if self.state_data.get("playback_state") == "playing":
+                        kwargs["small_image"] = play_key
+                        kwargs["small_text"] = "Playing"
+                        if self.state_data.get("time", 0) > 0:
+                            kwargs["start"] = int(time.time()) - self.state_data["time"]
+                    else:
+                        kwargs["small_image"] = pause_key
+                        kwargs["small_text"] = "Paused"
+
+                    if self.state_data.get("playback_state") == "playing" and self.state_data.get("length", 0) > 0:
+                        current_time = int(time.time())
+                        kwargs["start"] = current_time - self.state_data["time"]
+                        kwargs["end"] = kwargs["start"] + self.state_data["length"]
+
+                    buttons = []
+                    _btn_meta = self.state_data.get("metadata") or {}
+                    display_title = self.state_data.get("cleaned_title") or self.state_data.get("title", "")
+
+                    if media_type != "music" and display_title:
+                        trailer_query = urllib.parse.quote(f"{display_title} official trailer")
+                        buttons.append({
+                            "label": "Watch Trailer",
+                            "url": f"https://www.youtube.com/results?search_query={trailer_query}"
+                        })
+
+                    anilist_username = self.fetch_anilist_username()
+                    if anilist_username:
+                        buttons.append({
+                            "label": "My AniList Profile",
+                            "url": f"https://anilist.co/user/{urllib.parse.quote(anilist_username)}/"
+                        })
+                    else:
+                        anilist_id = _btn_meta.get("anilistId")
+                        if media_type == "anime" and anilist_id:
+                            buttons.append({"label": "View on AniList", "url": f"https://anilist.co/anime/{anilist_id}"})
+                        elif media_type == "movie" and _btn_meta.get("page_url"):
+                            buttons.append({"label": "View on IMDb", "url": _btn_meta["page_url"]})
+                        elif media_type == "tv_show" and _btn_meta.get("page_url"):
+                            buttons.append({"label": "View on TVmaze", "url": _btn_meta["page_url"]})
+
+                    if buttons:
+                        kwargs["buttons"] = buttons
+
+                    self.discord_manager.submit_activity(self.media_generation, desired_client_id, kwargs)
+                except Exception as e:
+                    self.log(f"Error computing Discord activity: {e}")
 
             update_interval = self.config.get("update_interval", 2)
 
@@ -8064,6 +7825,7 @@ def on_closing():
 
 
         backend.state_data["exit_flag"] = True
+        backend.discord_manager.stop()
 
 
         return True # Proceed with close
@@ -8211,6 +7973,7 @@ def setup_tray():
 
 
         backend.state_data["exit_flag"] = True
+        backend.discord_manager.stop()
 
 
         icon.stop()
@@ -8406,6 +8169,7 @@ if __name__ == '__main__':
 
 
     backend.state_data["exit_flag"] = True
+    backend.discord_manager.stop()
 
 
     os._exit(0)
