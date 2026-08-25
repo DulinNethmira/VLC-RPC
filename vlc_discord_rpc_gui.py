@@ -236,7 +236,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.3.1"
+CURRENT_VERSION = "5.3.2"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -457,29 +457,6 @@ def clean_title(title):
     title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
     title = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
     
-    def _bracket_to_subtitle(m):
-        c = m.group(1).strip()
-        if ' ' not in c and "'" not in c and re.match(r'^[\w\-\.]+$', c):
-            return m.group(0)
-        return ': ' + c
-    title = re.sub(r'\[([^\]]+)\]', _bracket_to_subtitle, title)
-
-    title = re.sub(r'([a-z])([A-Z])', r'\1 \2', title)
-    title = title.replace(';', ':')
-
-    def _smart_cap(w):
-        if not w: return w
-        if w.isupper() and len(w) <= 5: return w
-        def cap_part(p):
-            if not p: return p
-            if any(c.isupper() for c in p[1:]): return p
-            return p.capitalize()
-        return '-'.join(cap_part(p) for p in w.split('-'))
-
-    def _apply_smart_cap(t):
-        if not t: return t
-        return ' '.join(_smart_cap(w) for w in str(t).split())
-
     result = {
         "title": title,
         "base_title": "",
@@ -509,23 +486,6 @@ def clean_title(title):
             year = guessed.get('year')
             if year:
                 cleaned = f"{cleaned} ({year})"
-        
-        release_group = guessed.get('release_group')
-        if release_group and isinstance(release_group, str):
-            rg = release_group.strip()
-            if ("'" in rg or " " in rg) and len(rg) > 3 and cleaned and rg.lower() not in cleaned.lower():
-                cleaned = cleaned + ": " + rg
-                
-        alt_title = guessed.get('alternative_title')
-        if alt_title:
-            if isinstance(alt_title, list):
-                alt_title = ' '.join(alt_title)
-            if isinstance(alt_title, str) and cleaned:
-                at = alt_title.strip()
-                if at and at.lower() not in cleaned.lower():
-                    cleaned = cleaned + " " + at
-                
-        cleaned = _apply_smart_cap(cleaned)
         
         season = guessed.get('season')
         episode = guessed.get('episode')
@@ -806,6 +766,7 @@ class DiscordManager(threading.Thread):
                     self.rpc_backoff = 1
                     self.rpc_reconnect_at = 0.0
                     self.last_update_time = 0
+                    self._last_published_kwargs = None
                 except Exception as e:
                     self.rpc = None
                     self.current_client_id = None
@@ -1104,14 +1065,15 @@ class RPCBackend:
 
 
 
+        self.media_generation = 0
         self.worker_thread = threading.Thread(target=self.rpc_worker, daemon=True)
 
 
         self.worker_thread.start()
-        self.media_generation = 0
         initial_client_id = self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID
         self.discord_manager = DiscordManager(self, initial_client_id)
         self.discord_manager.start()
+
 
 
         
@@ -4690,16 +4652,7 @@ class RPCBackend:
 
 
 
-            search_title = re.sub(r'\b(19|20)\d{2}\b', '', cleaned_title)
-
-
-            search_title = re.sub(r'[\(\)]', '', search_title).strip()
-
-
-            search_title = re.sub(r'\bSeason\s+\d+\b', '', search_title, flags=re.IGNORECASE).strip()
-
-
-            search_title = re.sub(r'\s{2,}', ' ', search_title).strip()
+            search_title = cleaned_title
 
 
 
@@ -4986,21 +4939,11 @@ class RPCBackend:
 
 
                 if metadata:
-
-
                     official = metadata.get("official_title")
-
-
                     if official and isinstance(official, str) and official.strip():
-
-
-                        self.state_data["cleaned_title"] = official.strip()
-
-
                         self.log(f"[Metadata] Title resolved: '{cleaned_title}' → '{official.strip()}'")
 
-
-                self.log(f"[Metadata] Applied metadata for '{self.state_data.get('cleaned_title', cleaned_title)}'")
+                self.log(f"[Metadata] Applied metadata for '{cleaned_title}'")
                 if cache_key in self._metadata_neg_cache:
                     del self._metadata_neg_cache[cache_key]
                     self._set_health("metadata", "HEALTHY", "Metadata fetching restored")
@@ -6030,15 +5973,17 @@ class RPCBackend:
                     media_type = self.state_data.get("media_type", "movie")
 
                     # Contextual Discord Activity Mapping
+                    _meta = self.state_data.get("metadata") or {}
+                    display_title = _meta.get("official_title") or self.state_data.get("cleaned_title") or self.state_data.get("title", "")
+                    
                     if media_type == "music":
                         kwargs["activity_type"] = ActivityType.LISTENING
-                        kwargs["details"] = self.state_data.get("cleaned_title", self.state_data.get("title", ""))
+                        kwargs["details"] = display_title
                         kwargs["state"] = f"by {self.state_data.get('artist', 'Unknown')}"
                         kwargs["large_text"] = f"Album: {self.state_data.get('album', 'Unknown')}"
                     elif media_type == "movie":
                         kwargs["activity_type"] = ActivityType.WATCHING
-                        kwargs["details"] = self.state_data.get("cleaned_title", self.state_data.get("title", ""))
-                        _meta = self.state_data.get("metadata") or {}
+                        kwargs["details"] = display_title
                         genres = _meta.get("genres", [])
                         if isinstance(genres, list):
                             genres = [g for g in genres if g.lower() not in ("anime", "animation")]
@@ -6058,15 +6003,14 @@ class RPCBackend:
                         elif rating:
                             kwargs["state"] = f"⭐ {rating}"
                         desc = self.state_data.get("metadata", {}).get("description", "") if self.state_data.get("metadata") else ""
-                        kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data.get("title", "")) + (f" • {desc}" if desc else "")
+                        kwargs["large_text"] = display_title + (f" • {desc}" if desc else "")
                     else:
                         kwargs["activity_type"] = ActivityType.WATCHING
                         watch_mode = self.state_data.get("watch_mode", "NORMAL")
                         # Generation guard: ignore stale rewatch state from previous session
                         if self.state_data.get("_rewatch_generation", -1) != self.media_generation:
                             watch_mode = "NORMAL"
-                        cleaned_title = self.state_data.get("cleaned_title", self.state_data.get("title", ""))
-                        kwargs["details"] = f"\u21bb Rewatching {cleaned_title}" if watch_mode == "REWATCH" else cleaned_title
+                        kwargs["details"] = f"\u21bb Rewatching {display_title}" if watch_mode == "REWATCH" else display_title
 
                         ep_str = self.state_data.get("episode_str", "")
                         _meta = self.state_data.get("metadata") or {}
@@ -6908,12 +6852,10 @@ class WebApi:
 
 
     def get_state(self):
+        # Return a shallow copy so pywebview serialization is never racing
+        # against the rpc_worker thread mutating state_data concurrently.
+        return dict(self._backend.state_data)
 
-
-        return self._backend.state_data
-
-
-        
 
 
     def get_config(self):
