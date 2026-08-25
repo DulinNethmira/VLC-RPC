@@ -17,6 +17,22 @@ function formatTime(seconds) {
 
 const COVER_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180"%3E%3Crect fill="%2322222a" width="180" height="180"/%3E%3Cpath d="M50 56h80v68H50z" fill="%2330303a"/%3E%3Cpath d="M58 70h64M58 86h64M58 102h42" stroke="%235b6070" stroke-width="8" stroke-linecap="round"/%3E%3C/svg%3E';
 
+function parseMarkdown(text) {
+    if (!text) return '';
+    let html = text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') // escape html
+        .replace(/### (.*?)\n/g, '<h3 style="color:var(--text-primary); margin:8px 0 4px;">$1</h3>\n')
+        .replace(/#### (.*?)\n/g, '<h4 style="color:var(--text-primary); margin:6px 0 2px;">$1</h4>\n')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code style="background:rgba(255,255,255,0.1); padding:2px 4px; border-radius:3px; font-family:monospace;">$1</code>')
+        .replace(/^- (.*)/gm, '<li style="margin-left:16px;">$1</li>');
+        
+    html = html.replace(/(<li.*?>.*?<\/li>\n?)+/g, '<ul style="margin:4px 0; padding:0;">$&</ul>');
+    html = html.replace(/\n/g, '<br>');
+    return html;
+}
+
 function getRatingText(metadata) {
     if (!metadata) return '';
     const rating = metadata.episode_rating || metadata.rating || metadata.imdb_rating || '';
@@ -419,7 +435,7 @@ function initPyWebview() {
                 const btnVer = document.getElementById('update-btn-ver');
 
                 if (verLabel) verLabel.textContent = `v${state.update_version} is available — you have v${state.current_version || '?'}`;
-                if (changelogBox) changelogBox.textContent = state.update_changelog || 'See GitHub for details.';
+                if (changelogBox) changelogBox.innerHTML = parseMarkdown(state.update_changelog || 'See GitHub for details.');
                 if (btnVer) btnVer.textContent = state.update_version;
                 if (dlBtn) {
                     dlBtn.onclick = () => {
@@ -695,7 +711,7 @@ function checkUpdates() {
             const btnVer = document.getElementById('update-btn-ver');
 
             if (verLabel) verLabel.textContent = `v${result.update_version} is available — you have v${result.current_version || '?'}`;
-            if (changelogBox) changelogBox.textContent = result.update_changelog || 'See GitHub for details.';
+            if (changelogBox) changelogBox.innerHTML = parseMarkdown(result.update_changelog || 'See GitHub for details.');
             if (btnVer) btnVer.textContent = result.update_version;
             if (dlBtn) {
                 dlBtn.dataset.ready = "";
