@@ -113,7 +113,7 @@ class TestStateMachineStress(unittest.TestCase):
 
     def test_discord_reconnect(self):
         """Test Simulation 3: Discord connect -> disconnect -> reconnect sequence."""
-        dm = DiscordManager(self.backend)
+        dm = DiscordManager(self.backend, "123456789")
         self.assertEqual(dm.state, "DISCONNECTED")
 
         # Simulate connect failure / loss
