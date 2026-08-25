@@ -236,7 +236,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.3.0"
+CURRENT_VERSION = "5.3.1"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -694,7 +694,7 @@ import queue
 from pypresence import Presence
 
 class DiscordManager(threading.Thread):
-    def __init__(self, backend_ref):
+    def __init__(self, backend_ref, initial_client_id):
         super().__init__(daemon=True)
         self.backend_ref = backend_ref
         self.cmd_queue = queue.Queue()
@@ -702,6 +702,7 @@ class DiscordManager(threading.Thread):
         self.current_client_id = None
         self.current_generation = -1
         self.current_kwargs = None
+        self.initial_client_id = initial_client_id
         
         self.rpc_backoff = 1
         self.rpc_reconnect_at = 0.0
@@ -760,8 +761,11 @@ class DiscordManager(threading.Thread):
         return False
 
     def run(self):
+        import asyncio
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        
         self.set_state("CONNECTING", "Starting Discord manager...")
-        desired_client_id = None
+        desired_client_id = self.initial_client_id
         
         while not self._stop_event.is_set():
             try:
@@ -1105,7 +1109,8 @@ class RPCBackend:
 
         self.worker_thread.start()
         self.media_generation = 0
-        self.discord_manager = DiscordManager(self)
+        initial_client_id = self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID
+        self.discord_manager = DiscordManager(self, initial_client_id)
         self.discord_manager.start()
 
 
