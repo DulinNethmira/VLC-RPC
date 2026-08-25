@@ -5068,6 +5068,7 @@ class RPCBackend:
 
 
                     tag_title = meta.get("title", "")
+                    now_playing = meta.get("now_playing", "")
 
 
                     raw_title = tag_title or file_name or "Unknown Track"
@@ -5579,21 +5580,11 @@ class RPCBackend:
                     self.state_data["episode_str"] = episode_str
 
 
-                    # track_key only uses STABLE identifiers: playlist ID, file path, filename,
-
-
-                    # and the Gemini-resolved title+episode. Raw VLC tag title/artist are
-
-
-                    # deliberately excluded — they update mid-playback and would cause
-
-
-                    # endless spurious metadata re-fetches for the same file.
-
-
-                    track_key = f"{current_plid}:{input_uri}:{file_name}:{cleaned_title}:{episode_str}"
-
-
+                    # track_key only uses STABLE identifiers: playlist ID, file path, filename, and now_playing.
+                    # Resolved titles (Gemini) or dynamic episodes are excluded because
+                    # they update mid-playback and cause false media boundaries, which
+                    # destroys rewatch state and triggers spurious metadata fetches.
+                    track_key = f"{current_plid}:{input_uri}:{file_name}:{now_playing}"
                     # Resolve once per normalized series/season identity. The resolver
                     # is asynchronous and auto-sync will wait for SYNCABLE state.
                     self.ensure_anilist_identity(cleaned_title, episode_str, is_music)
