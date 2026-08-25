@@ -465,7 +465,7 @@ def clean_title(title):
         "media_type": ""
     }
 
-    loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\.\-:&!,]+?)[\s\._]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
+    loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\.\-:&!,;\(\)\[\]]+?)[\s\._]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
     explicit_ep = re.search(r'\b(?:Episode|Ep|E)\s*\d{1,4}\s*$', title, re.I)
     
     raw_title_for_guessit = title
