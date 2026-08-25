@@ -2173,6 +2173,11 @@ class RPCBackend:
                     "identity_version": ANILIST_IDENTITY_VERSION,
                     "state": "SYNCABLE",
                     "validated": True,
+                    "image_url": (media.get("coverImage") or {}).get("extraLarge") or (media.get("coverImage") or {}).get("large") or "",
+                    "genres": media.get("genres") or [],
+                    "rating": media.get("averageScore"),
+                    "description": media.get("description") or "",
+                    "url": media.get("siteUrl") or "",
                 }
                 with self._anilist_identity_lock:
                     self.anilist_identity_cache[identity_key] = identity.copy()
@@ -4713,51 +4718,39 @@ class RPCBackend:
 
 
             elif media_type == "anime":
-
-
-                # AniList: best English title matching + season-aware
-
-
-                if season_num and season_num > 1:
-
-
-                    ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
-
-
-                    suffix = ordinals.get(season_num, f"{season_num}th")
-
-
-                    metadata = prepared(self.fetch_anilist_metadata(f"{search_title} {suffix} Season"))
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    metadata = prepared(self.fetch_anilist_metadata(search_title))
-
-
-                # Jikan fallback
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
+                # Wait for the robust identity resolver to finish (max 5s)
+                for _ in range(50):
+                    ident = self.current_anilist_identity or {}
+                    if ident.get("state") in ("SYNCABLE", "UNRESOLVED", "AMBIGUOUS", "API_ERROR"):
+                        break
+                    time.sleep(0.1)
+                
+                ident = self.current_anilist_identity or {}
+                if ident.get("state") == "SYNCABLE" and ident.get("image_url"):
+                    metadata = prepared({
+                        "image_url": ident.get("image_url"),
+                        "genres": ident.get("genres", []),
+                        "rating": ident.get("rating"),
+                        "official_title": ident.get("title"),
+                        "description": ident.get("description"),
+                        "url": ident.get("url"),
+                    })
+                else:
+                    # Fallback to blind search if identity resolver failed or didn't run
                     if season_num and season_num > 1:
-
-
                         ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
-
-
                         suffix = ordinals.get(season_num, f"{season_num}th")
-
-
-                        metadata = prepared(self.fetch_jikan_metadata(f"{search_title} {suffix} Season"))
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    metadata = prepared(self.fetch_jikan_metadata(search_title))
+                        metadata = prepared(self.fetch_anilist_metadata(f"{search_title} {suffix} Season"))
+                    if not metadata or not metadata.get("image_url"):
+                        metadata = prepared(self.fetch_anilist_metadata(search_title))
+                    # Jikan fallback
+                    if not metadata or not metadata.get("image_url"):
+                        if season_num and season_num > 1:
+                            ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
+                            suffix = ordinals.get(season_num, f"{season_num}th")
+                            metadata = prepared(self.fetch_jikan_metadata(f"{search_title} {suffix} Season"))
+                    if not metadata or not metadata.get("image_url"):
+                        metadata = prepared(self.fetch_jikan_metadata(search_title))
 
 
                 # Supplement rating from OMDb if missing
