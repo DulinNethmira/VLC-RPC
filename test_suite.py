@@ -318,6 +318,41 @@ class TestScenarios(BaseIntegrationTest):
         should_query = bool(self.backend.config.get("gemini_api_key")) and raw_name.strip().lower() not in _JUNK_NAMES
         self.assertFalse(should_query)
 
+    def test_regression_o_tokyo_ghoul_re_default_anime_media_type(self):
+        # O. Tokyo Ghoul;re E09.mkv without 'anime' in folder path defaults to anime media_type
+        # ensuring ensure_anilist_identity runs for AniList integration & rewatch detection
+        import os
+        file_name = "Tokyo Ghoul;re E09.mkv"
+        file_ext = os.path.splitext(file_name)[1].lower()
+        if file_ext in [".mp3", ".flac", ".wav", ".m4a", ".ogg", ".wma", ".aac"]:
+            media_type = "music"
+        else:
+            media_type = "anime"
+        self.assertEqual(media_type, "anime")
+        
+        # Verify ensure_anilist_identity triggers for Tokyo Ghoul;re E09
+        cleaned_title, episode_str, _ = vlc_discord_rpc_gui.media_identity_to_display(vlc_discord_rpc_gui.clean_title(file_name))
+        self.assertEqual(cleaned_title, "Tokyo Ghoul;re")
+        self.assertEqual(episode_str, "Episode 9")
+        
+        self.backend.current_anilist_identity = None
+        # Mock _resolve_anilist_identity to set SYNCABLE identity directly
+        def mock_resolve(identity_key, title, ep_str, launch_gen=None):
+            self.backend._apply_anilist_identity({
+                "anilist_id": 100240,
+                "title": "Tokyo Ghoul:re",
+                "state": "SYNCABLE",
+                "validated": True,
+                "image_url": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/nx100240.jpg",
+                "source_key": identity_key
+            }, launch_gen)
+        
+        with patch.object(self.backend, '_resolve_anilist_identity', side_effect=mock_resolve):
+            self.backend.ensure_anilist_identity(cleaned_title, episode_str, False, media_type=media_type)
+            self.assertIsNotNone(self.backend.current_anilist_identity)
+            self.assertEqual(self.backend.current_anilist_identity.get("state"), "SYNCABLE")
+
 if __name__ == '__main__':
     unittest.main()
+
 

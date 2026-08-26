@@ -236,7 +236,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.5.0"
+CURRENT_VERSION = "5.6.0"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -4785,6 +4785,10 @@ class RPCBackend:
                             metadata = prepared(self.fetch_jikan_metadata(f"{search_title} {suffix} Season"))
                     if not metadata or not metadata.get("image_url"):
                         metadata = prepared(self.fetch_jikan_metadata(search_title))
+
+                    # TVMaze fallback if AniList/Jikan returned no cover (e.g. for non-anime shows)
+                    if not metadata or not metadata.get("image_url"):
+                        metadata = prepared(self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num))
 
 
                 # Supplement rating from OMDb if missing
