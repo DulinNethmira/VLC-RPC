@@ -236,7 +236,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.3.4"
+CURRENT_VERSION = "5.4.0"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -311,11 +311,20 @@ DEFAULT_CONFIG = {
 
 
 
-def query_gemini_title(filename, api_key):
-    """Use Gemini REST API to get the exact official anime/media title and episode."""
-    if not api_key: return None
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
-    
+def query_gemini_title(filename, api_key, logger=None):
+    """Use Gemini REST API to get exact official media title and episode with strict validation."""
+    if not api_key:
+        if logger:
+            logger("[Gemini Diagnostics] Skipped: No API key provided")
+        return None
+
+    # Recommended header-based authentication instead of URL query param
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    headers = {
+        "x-goog-api-key": api_key,
+        "Content-Type": "application/json"
+    }
+
     prompt = """
 You are an expert media metadata resolver with internet knowledge.
 
@@ -332,58 +341,7 @@ Rules:
 5. If a season or movie number is part of the title, preserve it in the "title" field, BUT ALSO populate the "base_title" and "season" fields.
 6. Ignore completely: Resolution, Codec, Fansub/Release group, CRC, File extension.
 
-Examples
-
-Input:
-Overlord II E10.mkv
-
-Output:
-{
-  "title": "Overlord II",
-  "base_title": "Overlord",
-  "season": 2,
-  "episode": 10,
-  "media_type": "anime"
-}
-
-Input:
-ReZERO - Starting Life in Another World Season 2 E08
-
-Output:
-{
-  "title": "Re:ZERO -Starting Life in Another World- 2nd Season",
-  "base_title": "Re:ZERO -Starting Life in Another World-",
-  "season": 2,
-  "episode": 8,
-  "media_type": "anime"
-}
-
-Input:
-SPY FAMILY S01E05
-
-Output:
-{
-  "title": "SPY×FAMILY",
-  "base_title": "SPY×FAMILY",
-  "season": 1,
-  "episode": 5,
-  "media_type": "anime"
-}
-
-Input:
-Fate Stay Night [Heaven's Feel] II. lost butterfly.mkv
-
-Output:
-{
-  "title": "Fate/stay night [Heaven's Feel] II. lost butterfly",
-  "base_title": "Fate/stay night",
-  "season": null,
-  "episode": null,
-  "media_type": "movie"
-}
-
 Return ONLY valid JSON in this exact format:
-
 {
   "title": "...",
   "base_title": "...",
@@ -395,15 +353,25 @@ Return ONLY valid JSON in this exact format:
 Filename:
 {filename}
 """
-    prompt = prompt.replace('{filename}', filename)
-    
-    def _parse_response(text):
-        if text.startswith("```"):
-            text = text.strip("`").strip()
-            if text.lower().startswith("json"):
-                text = text[4:].strip()
-        parsed = json.loads(text)
-        return parsed
+    prompt = prompt.replace('{filename}', str(filename or ""))
+
+    def _validate(parsed):
+        if not isinstance(parsed, dict):
+            return None, "Response is not a JSON object"
+        title = parsed.get("title")
+        if not title or not isinstance(title, str) or not title.strip():
+            return None, "Missing or empty 'title'"
+        media_type = parsed.get("media_type")
+        valid_types = {"anime", "movie", "tv_show", "song", "music", "ova", "special", "unknown"}
+        if not media_type or not isinstance(media_type, str) or media_type.lower() not in valid_types:
+            return None, f"Invalid 'media_type': {media_type}"
+        season = parsed.get("season")
+        if season is not None and not isinstance(season, (int, float)):
+            return None, f"Invalid 'season': {season}"
+        episode = parsed.get("episode")
+        if episode is not None and not isinstance(episode, (int, float)):
+            return None, f"Invalid 'episode': {episode}"
+        return parsed, "OK"
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -411,12 +379,35 @@ Filename:
     }
     try:
         import requests
-        r = requests.post(url, json=payload, timeout=15)
+        r = requests.post(url, json=payload, headers=headers, timeout=12)
         if r.status_code == 200:
             text = r.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-            return _parse_response(text)
+            if text.startswith("```"):
+                text = text.strip("`").strip()
+                if text.lower().startswith("json"):
+                    text = text[4:].strip()
+            parsed = json.loads(text)
+            validated, val_msg = _validate(parsed)
+            if validated:
+                if logger:
+                    logger(f"[Gemini Diagnostics] Success for '{filename}': {validated.get('title')}")
+                return validated
+            else:
+                if logger:
+                    logger(f"[Gemini Diagnostics] Schema validation failed for '{filename}': {val_msg}")
+                return None
+        else:
+            if logger:
+                logger(f"[Gemini Diagnostics] HTTP Error {r.status_code} for '{filename}'")
+    except requests.Timeout:
+        if logger:
+            logger(f"[Gemini Diagnostics] Request timed out (12s) for '{filename}'")
+    except json.JSONDecodeError as err:
+        if logger:
+            logger(f"[Gemini Diagnostics] Malformed JSON response for '{filename}': {err}")
     except Exception as e:
-        pass
+        if logger:
+            logger(f"[Gemini Diagnostics] API call error for '{filename}': {e}")
     return None
 
 
@@ -452,61 +443,86 @@ def clean_title(title):
     """Parse a raw filename into structured media identity data."""
     import re
     import guessit
-    title = str(title or "")
-    title = re.sub(r'^\d+[\.\-]\s+', '', title)
-    title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
-    title = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
+    raw = str(title or "")
+    # Strip extension
+    raw = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', raw, flags=re.I).strip()
+    raw = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', raw, flags=re.I).strip()
+    # Strip leading episode track numbers like "01 - " or "1. "
+    working = re.sub(r'^\d+[\.\-]\s+', '', raw)
+    # Strip release group brackets like "[SubsPlease] " or "[HorribleSubs] "
+    working = re.sub(r'^\s*\[[^\]]+\]\s*', '', working)
     
     result = {
-        "title": title,
+        "title": working,
         "base_title": "",
         "season": None,
         "episode": None,
         "media_type": ""
     }
 
-    loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\.\-:&!,;\(\)\[\]]+?)[\s\._]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
-    explicit_ep = re.search(r'\b(?:Episode|Ep|E)\s*\d{1,4}\s*$', title, re.I)
-    
-    raw_title_for_guessit = title
-    if loose_ep:
-        ep_num = int(loose_ep.group(2))
-        if explicit_ep or not (1900 <= ep_num <= 2099):
-            raw_title = re.sub(r'[\._ ]+', ' ', loose_ep.group(1)).strip()
-            raw_title = re.sub(r'[\s\-]+$', '', raw_title).strip()
-            result["episode"] = ep_num
-            raw_title_for_guessit = raw_title
+    # Explicit SxxExx pattern
+    se_match = re.search(r'\bS(\d{1,2})[\.\_\s]*E(\d{1,4})\b', working, re.I)
+    # Explicit Season X Episode Y pattern
+    season_ep_match = re.search(r'\bSeason\s*(\d{1,2})[\.\_\s]*(?:Episode|Ep|E)?\s*(\d{1,4})\b', working, re.I)
+    # Explicit Episode X pattern
+    ep_only_match = re.search(r'\b(?:Episode|Ep|E)\s*(\d{1,4})\b', working, re.I)
+    # Loose dash episode pattern like "- 07"
+    dash_ep_match = re.search(r'[\s\._]\-\s*(\d{1,4})\s*$', working)
+
+    season_found = None
+    episode_found = None
+    title_part = working
+
+    if se_match:
+        season_found = int(se_match.group(1))
+        episode_found = int(se_match.group(2))
+        title_part = working[:se_match.start()].strip()
+    elif season_ep_match:
+        season_found = int(season_ep_match.group(1))
+        episode_found = int(season_ep_match.group(2))
+        title_part = working[:season_ep_match.start()].strip()
+    elif ep_only_match:
+        episode_found = int(ep_only_match.group(1))
+        title_part = working[:ep_only_match.start()].strip()
+    elif dash_ep_match:
+        episode_found = int(dash_ep_match.group(1))
+        title_part = working[:dash_ep_match.start()].strip()
+
+    # Clean title_part: if formatted with dots like Tokyo.Ghoul.re, replace dots with spaces unless colon/punctuation
+    if '.' in title_part and not re.search(r'\b(?:mkv|mp4|avi)\b', title_part, re.I):
+        # Don't destroy words like Re:ZERO
+        title_part = re.sub(r'[\._]+', ' ', title_part).strip()
+
+    title_part = re.sub(r'[\s\-]+$', '', title_part).strip()
+
+    result["title"] = title_part if title_part else working
+    result["season"] = season_found
+    result["episode"] = episode_found
 
     try:
-        guessed = guessit.guessit(raw_title_for_guessit)
-        cleaned = guessed.get('title', raw_title_for_guessit)
+        guessed = guessit.guessit(working)
+        guess_title = guessed.get('title')
         media_type = guessed.get('type', '')
+        year = guessed.get('year')
 
-        if media_type == 'movie':
-            year = guessed.get('year')
+        if guess_title:
             if year:
-                cleaned = f"{cleaned} ({year})"
-        
-        season = guessed.get('season')
-        episode = guessed.get('episode')
-        
-        if isinstance(season, list): season = season[0]
-        if isinstance(episode, list): episode = episode[0]
-        
-        result["title"] = cleaned
-        if season: result["season"] = season
-        
-        if episode is not None:
-            if result["episode"] is not None:
-                if str(season) + str(episode) == str(result["episode"]):
-                    result["season"] = None
-                else:
-                    result["episode"] = episode
+                result["title"] = f"{guess_title} ({year})"
             else:
-                result["episode"] = episode
-                
+                result["title"] = guess_title
+
+        guess_season = guessed.get('season')
+        guess_ep = guessed.get('episode')
+        if isinstance(guess_season, list): guess_season = guess_season[0]
+        if isinstance(guess_ep, list): guess_ep = guess_ep[0]
+
+        if result["season"] is None and guess_season is not None:
+            result["season"] = guess_season
+        if result["episode"] is None and guess_ep is not None:
+            result["episode"] = guess_ep
+
         result["media_type"] = media_type if media_type else ""
-    except Exception as e:
+    except Exception:
         pass
 
     return result
@@ -761,7 +777,7 @@ class DiscordManager(threading.Thread):
                 try:
                     self.rpc = Presence(desired_client_id)
                     self.rpc.connect()
-                    self.current_client_id = desired_client_id
+                    self.current_client_id = str(desired_client_id) if desired_client_id else None
                     self.set_state("CONNECTED", "Connected to Discord.")
                     self.rpc_backoff = 1
                     self.rpc_reconnect_at = 0.0
@@ -1560,8 +1576,8 @@ class RPCBackend:
     def _anilist_candidate_score(self, requested_title, episode_str, candidate):
         """Return a conservative score for one AniList candidate.
 
-        A title similarity alone is never sufficient for a later season.  This
-        deliberately prefers an unresolved sync over a potentially wrong ID.
+        An exact title match is a very strong signal. Do not reject an exact title
+        merely because AniList does not encode the local season number.
         """
         requested = self._normalize_anilist_title(requested_title)
         _, requested_base, requested_season = self._anilist_identity_key(
@@ -1583,18 +1599,18 @@ class RPCBackend:
 
         score = 0
         reason = "titles differ"
+        is_exact_match = False
+
         for variant in variants:
             if variant == requested:
                 score = max(score, 100)
                 reason = "exact title"
+                is_exact_match = True
             else:
                 _, variant_base, _ = self._anilist_identity_key(variant)
                 if requested_base and variant_base == requested_base:
                     score = max(score, 88)
                     reason = "exact base title"
-                # AniList commonly labels a sequel as "Title 2", while local
-                # files use "Title Season 2". Treat that as exact only when
-                # both the base title and the explicit season number agree.
                 numeric_sequel = re.fullmatch(r"(.+?)\s+(\d{1,2})", variant)
                 if requested_season > 1 and numeric_sequel:
                     sequel_base = numeric_sequel.group(1).strip()
@@ -1602,6 +1618,7 @@ class RPCBackend:
                     if sequel_base == requested_base and sequel_number == requested_season:
                         score = max(score, 100)
                         reason = "exact base title with matching numeric sequel"
+                        is_exact_match = True
                 elif len(requested) >= 8 and len(variant) >= 8:
                     ratio = SequenceMatcher(None, requested, variant).ratio()
                     if ratio >= 0.97:
@@ -1619,6 +1636,7 @@ class RPCBackend:
                 and numeric_sequel.group(1).strip() == requested_base
             ):
                 candidate_season = max(candidate_season, int(numeric_sequel.group(2)))
+
         if requested_season > 1:
             if candidate_season == requested_season:
                 score += 12
@@ -1627,8 +1645,12 @@ class RPCBackend:
                 score -= 75
                 reason += ", different season"
             else:
-                score -= 50
-                reason += ", candidate season is unspecified"
+                # If exact title matched (e.g. Tokyo Ghoul:re), AniList doesn't encode season number in title, so don't subtract 50
+                if not is_exact_match:
+                    score -= 50
+                    reason += ", candidate season is unspecified"
+                else:
+                    reason += ", candidate season unspecified (exact title match preserved)"
         elif candidate_season > 1:
             score -= 75
             reason += ", candidate is a later season"
@@ -2122,35 +2144,50 @@ class RPCBackend:
             if payload.get("errors"):
                 raise RuntimeError(payload["errors"][0].get("message", "AniList query failed"))
             candidates = ((payload.get("data") or {}).get("Page") or {}).get("media") or []
+            
+            norm_title = self._normalize_anilist_title(title)
+            _, _, requested_season = self._anilist_identity_key(title, episode_str)
+            self.anilist_log(
+                f"[AniList Diagnostics] Requested: '{title}' | Normalized: '{norm_title}' | Requested Season: {requested_season}"
+            )
+
             scored = []
             for candidate in candidates:
+                cand_id = candidate.get("id")
+                cand_titles = candidate.get("title") or {}
+                cand_title = cand_titles.get("english") or cand_titles.get("romaji") or cand_titles.get("native") or "Unknown"
                 score, reason = self._anilist_candidate_score(title, episode_str, candidate)
+                self.anilist_log(
+                    f"[AniList Candidate] ID: {cand_id} | Title: '{cand_title}' | Score: {score} | Reason: {reason}"
+                )
                 if score:
                     scored.append((score, reason, candidate))
             scored.sort(key=lambda item: item[0], reverse=True)
 
             if not scored or scored[0][0] < ANILIST_IDENTITY_CONFIDENCE:
+                confidence = scored[0][0] / 100 if scored else 0.0
                 identity = {
                     "source_key": identity_key,
                     "source_title": title,
-                    "normalized_title": self._normalize_anilist_title(title),
+                    "normalized_title": norm_title,
                     "state": "UNRESOLVED",
                     "validated": False,
-                    "confidence": scored[0][0] / 100 if scored else 0.0,
+                    "confidence": confidence,
                     "identity_version": ANILIST_IDENTITY_VERSION,
                 }
-                self.anilist_log("[AniList] Identity unresolved; sync skipped.")
+                self.anilist_log(f"[AniList Diagnostics] Final: UNRESOLVED (Confidence: {confidence:.2f})")
             elif len(scored) > 1 and scored[0][0] - scored[1][0] < 5:
+                confidence = scored[0][0] / 100
                 identity = {
                     "source_key": identity_key,
                     "source_title": title,
-                    "normalized_title": self._normalize_anilist_title(title),
+                    "normalized_title": norm_title,
                     "state": "AMBIGUOUS",
                     "validated": False,
-                    "confidence": scored[0][0] / 100,
+                    "confidence": confidence,
                     "identity_version": ANILIST_IDENTITY_VERSION,
                 }
-                self.anilist_log("[AniList] Identity ambiguous; AniList progress not modified.")
+                self.anilist_log(f"[AniList Diagnostics] Final: AMBIGUOUS (Top scores: {scored[0][0]} vs {scored[1][0]})")
             else:
                 score, reason, media = scored[0]
                 titles = media.get("title") or {}
@@ -2167,7 +2204,7 @@ class RPCBackend:
                     "media_type": media.get("type") or "ANIME",
                     "source_key": identity_key,
                     "source_title": title,
-                    "normalized_title": self._normalize_anilist_title(title),
+                    "normalized_title": norm_title,
                     "confidence": score / 100,
                     "resolved_at": datetime.datetime.utcnow().isoformat() + "Z",
                     "identity_version": ANILIST_IDENTITY_VERSION,
@@ -2183,8 +2220,7 @@ class RPCBackend:
                     self.anilist_identity_cache[identity_key] = identity.copy()
                     self.save_metadata_cache()
                 self.anilist_log(
-                    f"[AniList] Identity validated: ID {identity['anilist_id']} "
-                    f"({score}% - {reason})"
+                    f"[AniList Diagnostics] Selected ID {identity['anilist_id']} '{identity['title']}' | Confidence: {score/100:.2f} ({score}% - {reason})"
                 )
 
             if self._anilist_fail_count > 0:
@@ -2224,9 +2260,9 @@ class RPCBackend:
                 self._anilist_identity_resolving.discard(identity_key)
 
 
-    def ensure_anilist_identity(self, title, episode_str, is_music=False):
+    def ensure_anilist_identity(self, title, episode_str, is_music=False, media_type="anime"):
         """Start identity resolution only for a new anime series/season context."""
-        if is_music or not title or not re.search(r"Episode\s*\d+", episode_str or "", re.IGNORECASE):
+        if is_music or media_type != "anime" or not title or not re.search(r"Episode\s*\d+", episode_str or "", re.IGNORECASE):
             return
         identity_key, _, _ = self._anilist_identity_key(title, episode_str)
         current = self.current_anilist_identity or {}
@@ -4400,10 +4436,8 @@ class RPCBackend:
     def _normalize_cache_key(self, s):
         """Lowercase, strip punctuation, collapse whitespace for collision-resistant cache keys."""
         import unicodedata
-        s = s.lower().strip()
-        # Remove common articles that differ between file names and API titles
-        s = re.sub(r'\b(the|a|an)\b', '', s)
-        # Keep alphanumeric and spaces only
+        s = str(s or "").lower().strip()
+        # Keep alphanumeric and spaces only (preserve semantic words like 'the', 'a', 'an')
         s = re.sub(r'[^\w\s]', ' ', s)
         s = re.sub(r'\s+', ' ', s).strip()
         return s
@@ -4837,6 +4871,24 @@ class RPCBackend:
                 self.log(f"[Metadata] OK Cover found for '{search_title}'")
 
 
+                try:
+
+
+                    color = self.get_dominant_color(metadata["image_url"])
+
+
+                    if color:
+
+
+                        metadata["dominant_color"] = color
+
+
+                except Exception:
+
+
+                    pass
+
+
             else:
 
 
@@ -4846,45 +4898,8 @@ class RPCBackend:
 
 
 
-            if metadata:
-
-
-                try:
-
-
-                    if metadata.get("image_url"):
-
-
-                        color = self.get_dominant_color(metadata["image_url"])
-
-
-                        if color:
-
-
-                            metadata["dominant_color"] = color
-
-
-                except Exception:
-
-
-                    pass
-
-
-                self.metadata_cache[cache_key] = metadata
-
-
-                self.save_metadata_cache()
-
-
-
-
-
             # ── Generation guard (primary) ─────────────────────────────────────
-            # Covers the same-file/different-session race:
-            # Generation N:  file A starts → metadata worker launched.
-            # Generation N+1: same file A stopped and restarted.
-            # Without this guard, still_same_file would pass (input_uri is
-            # identical) and the stale Gen-N result would overwrite Gen-N+1 state.
+            # Must be checked BEFORE persistent metadata_cache mutation or state_data modification!
             if self.media_generation != entry_generation:
                 self.log(
                     f"[METADATA] Discarded stale result: generation {entry_generation} "
@@ -4894,61 +4909,52 @@ class RPCBackend:
                 return
 
             # ── File-URI guard (secondary) ────────────────────────────────────────
-            # Only apply metadata if the user is still on the same file.
-            # Use input_uri (the file path) rather than rebuilding current_key from
-            # volatile state — this prevents the race where track_key has moved on
-            # but input_uri hasn't changed (same file, title just got resolved by Gemini).
             still_same_file = (
-                not input_uri  # backwards compat: old calls without input_uri always apply
+                not input_uri
                 or self.state_data.get("_last_art_key", "") == input_uri
                 or self.state_data.get("_last_art_uri", "") == input_uri
             )
 
-            if still_same_file:
-
-
-                self.state_data["metadata"] = metadata
-
-
-                self.state_data["local_image_path"] = metadata.get("image_url") if metadata else None
-
-
-                self.state_data["status_message"] = "Metadata loaded successfully."
-
-
-                # â”€â”€ Official title override â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
-                # Every metadata source (AniList, OMDb, TVMaze, Jikan) now returns
-
-
-                # an "official_title" field with the authoritative database name.
-
-
-                # We override the display title with it so regardless of how the
-
-
-                # user named their file, the UI always shows the correct title.
-
-
-                if metadata:
-                    official = metadata.get("official_title")
-                    if official and isinstance(official, str) and official.strip():
-                        self.log(f"[Metadata] Title resolved: '{cleaned_title}' → '{official.strip()}'")
-
-                self.log(f"[Metadata] Applied metadata for '{cleaned_title}'")
-                if cache_key in self._metadata_neg_cache:
-                    del self._metadata_neg_cache[cache_key]
-                    self._set_health("metadata", "HEALTHY", "Metadata fetching restored")
 
 
 
 
 
-            else:
+            if not still_same_file:
+                self.log(f"[STATE] Discarded stale metadata fetch for '{search_title}' (file changed)")
+                return
 
+            # Safe to persist cache & update state now that generation & identity are verified!
+            with self._metadata_cache_lock:
+                if metadata and metadata.get("image_url"):
+                    existing = self.metadata_cache.get(cache_key)
+                    merged = self._merge_metadata(existing, metadata)
+                    merged["_cache_version"] = METADATA_CACHE_VERSION
+                    self.metadata_cache[cache_key] = merged
+                    if cache_key in self._metadata_neg_cache:
+                        del self._metadata_neg_cache[cache_key]
+                else:
+                    neg_entry = {
+                        "_negative": True,
+                        "_negative_ts": time.time(),
+                        "_cache_version": METADATA_CACHE_VERSION
+                    }
+                    self.metadata_cache[cache_key] = neg_entry
+                    fail_count = self._metadata_neg_cache.get(cache_key, (0, 0))[1] + 1
+                    self._metadata_neg_cache[cache_key] = (time.time(), fail_count)
 
-                self.log(f"[STATE] Discarded stale metadata fetch for '{search_title}' (generation changed)")
+                self.save_metadata_cache()
+
+            self.state_data["metadata"] = metadata if (metadata and metadata.get("image_url")) else None
+            self.state_data["local_image_path"] = metadata.get("image_url") if (metadata and metadata.get("image_url")) else None
+            self.state_data["status_message"] = "Metadata loaded successfully." if (metadata and metadata.get("image_url")) else "No cover found."
+
+            if metadata and metadata.get("official_title"):
+                official = metadata.get("official_title")
+                if official and isinstance(official, str) and official.strip():
+                    self.log(f"[Metadata] Title resolved: '{cleaned_title}' → '{official.strip()}'")
+
+            self.log(f"[Metadata] Applied metadata for '{cleaned_title}'")
 
 
         except Exception as e:
@@ -5370,55 +5376,45 @@ class RPCBackend:
                         cached = self.gemini_cache.get(raw_name)
 
 
-                        last_fail = self.gemini_fail_times.get(raw_name, 0)
-
-
-                        # Spawn a new thread if: never tried, OR last failure was >60s ago
-
+                        if cached == "pending":
+                            pending_since = self.gemini_fail_times.get(f"_pending_{raw_name}", 0)
+                            if pending_since and time.time() - pending_since > 25:
+                                # Timeout pending state after 25s
+                                self.log(f"[Gemini] Recovery: Clearing stuck pending state for '{raw_name}'")
+                                self.gemini_cache[raw_name] = None
+                                cached = None
 
                         should_try = (
-
-
                             raw_name not in self.gemini_cache
-
-
                             or (cached is None and time.time() - last_fail > 3600)
-
-
                         )
 
-
                         if should_try:
-
-
                             self.gemini_cache[raw_name] = "pending"
+                            self.gemini_fail_times[f"_pending_{raw_name}"] = time.time()
 
-
-                            # Default-arg trick captures launch_generation at definition time
-                            # (Python closure semantics) — not at call time.
                             def _run_gemini(name, key, _launch_gen=self.media_generation):
+                                try:
+                                    res = query_gemini_title(name, key, logger=self.log)
+                                    t, e, mt = media_identity_to_display(res)
+                                except Exception as exc:
+                                    self.log(f"[Gemini] Exception resolving '{name}': {exc}")
+                                    t = None
 
-
-                                t, e, mt = media_identity_to_display(query_gemini_title(name, key))
-
+                                if self.media_generation != _launch_gen:
+                                    self.log(
+                                        f"[STATE] Discarded stale Gemini result for '{name}' "
+                                        f"(gen {_launch_gen} -> {self.media_generation})"
+                                    )
+                                    # Crucial: reset pending state so filename isn't stuck as pending forever!
+                                    self.gemini_cache[name] = None
+                                    return
 
                                 if t:
-                                    # Generation guard: discard if media changed while Gemini was resolving
-                                    if self.media_generation != _launch_gen:
-                                        self.log(
-                                            f"[STATE] Discarded stale Gemini result for '{name}' "
-                                            f"(gen {_launch_gen} -> {self.media_generation})"
-                                        )
-                                        return
-
-
                                     self.gemini_cache[name] = (t, e, mt or "")
-
-
                                     self.anilist_log(f"[Gemini AI] Match: {t} {e}")
                                     if self.state_data.get("health", {}).get("gemini") != "HEALTHY":
                                         self._set_health("gemini", "HEALTHY")
-
 
                                     try:
                                         _gc_tmp = self.gemini_cache_file + '.tmp'
@@ -5433,22 +5429,10 @@ class RPCBackend:
                                         os.replace(_gc_tmp, self.gemini_cache_file)
                                     except Exception:
                                         pass
-
-
                                 else:
-
-
-                                    # Don't permanently block - allow retry after 1 hour
-
-
                                     self.gemini_cache[name] = None
-
-
                                     self.gemini_fail_times[name] = time.time()
-
-
                                     self._set_health("gemini", "DEGRADED", "Gemini unavailable; using deterministic parser")
-
 
                             threading.Thread(target=_run_gemini, args=(raw_name, gemini_key), daemon=True).start()
 
@@ -5580,7 +5564,7 @@ class RPCBackend:
                     track_key = f"{current_plid}:{input_uri}:{file_name}:{now_playing}"
                     # Resolve once per normalized series/season identity. The resolver
                     # is asynchronous and auto-sync will wait for SYNCABLE state.
-                    self.ensure_anilist_identity(cleaned_title, episode_str, is_music)
+                    self.ensure_anilist_identity(cleaned_title, episode_str, is_music, media_type=media_type)
 
 
 
@@ -7188,15 +7172,13 @@ class WebApi:
         artist = b.state_data.get("artist", "")
 
 
-        cache_key = f"{media_type}:{title}:{artist}" if media_type == "music" else f"{media_type}:{title}:{ep_str}"
+        cache_key = b._build_cache_key(media_type, title, ep_str, artist=artist)
 
-
-        if cache_key in b.metadata_cache:
-
-
-            del b.metadata_cache[cache_key]
-
-
+        with b._metadata_cache_lock:
+            if cache_key in b.metadata_cache:
+                del b.metadata_cache[cache_key]
+            if cache_key in b._metadata_neg_cache:
+                del b._metadata_neg_cache[cache_key]
             b.save_metadata_cache()
 
 

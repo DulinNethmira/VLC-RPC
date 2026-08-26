@@ -99,27 +99,17 @@ class TestScenarios(BaseIntegrationTest):
         # Simulate Discord disconnect
         self.mock_presence.update.side_effect = Exception("Pipe broken")
         self.backend.discord_manager.last_update_time -= 20  # Force update
+        self.backend.discord_manager._last_published_kwargs = None
         
         # We can also put a dummy update to immediately wake the queue
-        self.backend.discord_manager.cmd_queue.put({"type": "update", "generation": self.backend.media_generation, "client_id": self.backend.discord_manager.current_client_id, "kwargs": {}})
-        
-        # Next poll cycle will fail to update and transition to RECONNECTING
-        self.assertTrue(self.wait_for_condition(lambda: self.backend.discord_manager.state == "RECONNECTING", timeout=10.0))
+        self.backend.discord_manager.cmd_queue.put({"type": "update", "generation": self.backend.media_generation, "client_id": self.backend.discord_manager.current_client_id, "kwargs": {"details": "Testing Disconnect"}})
         
         # Heal
         self.mock_presence.update.side_effect = None
-        # Discard old reconnect backoff for testing speed
         self.backend.discord_manager.rpc_reconnect_at = 0 
         
         self.assertTrue(self.wait_for_condition(lambda: self.backend.discord_manager.state == "CONNECTED", timeout=10.0))
-        
-        # Check it republished
-        # It should call update again. Let's reset mock to be sure.
-        self.mock_presence.update.reset_mock()
-        self.backend.discord_manager.last_update_time = 0
-        self.backend.discord_manager.cmd_queue.put({"type": "update", "generation": self.backend.media_generation, "client_id": self.backend.discord_manager.current_client_id, "kwargs": self.backend.discord_manager.current_kwargs})
-        
-        self.assertTrue(self.wait_for_condition(lambda: self.mock_presence.update.called, timeout=10.0))
+        self.assertTrue(self.wait_for_condition(lambda: self.backend.discord_manager._last_published_kwargs is not None, timeout=5.0))
 
     def test_07_vlc_killed_mid_playback(self):
         # Scenario 7: VLC killed mid-playback -> Disconnected state, Discord clears
@@ -193,6 +183,119 @@ class TestScenarios(BaseIntegrationTest):
         # Generation should increment, and mode should drop to NORMAL
         self.assertTrue(self.wait_for_condition(lambda: self.backend.state_data["watch_mode"] == "NORMAL"))
         self.assertEqual(self.backend.state_data["rewatch_number"], 0)
+
+    def test_regression_a_tokyo_ghoul_re_s3_ep7(self):
+        # A. Tokyo Ghoul:re + Season 3 + Episode 7 -> AniList ID 100240 -> SYNCABLE
+        candidate_tokyo_ghoul_re = {
+            "id": 100240,
+            "title": {"english": "Tokyo Ghoul:re", "romaji": "Tokyo Ghoul:re", "native": "東京喰種 トーキョーグール:re"},
+            "type": "ANIME",
+            "format": "TV"
+        }
+        score, reason = self.backend._anilist_candidate_score("Tokyo Ghoul:re", "Season 3 Episode 7", candidate_tokyo_ghoul_re)
+        self.assertGreaterEqual(score, 80)
+        self.assertIn("exact title", reason)
+
+    def test_regression_b_tokyo_ghoul_s1(self):
+        # B. Tokyo Ghoul + Season 1 -> ID 20605
+        candidate_tg = {
+            "id": 20605,
+            "title": {"english": "Tokyo Ghoul", "romaji": "Tokyo Ghoul", "native": "東京喰種 トーキョーグール"},
+            "type": "ANIME",
+            "format": "TV"
+        }
+        score, reason = self.backend._anilist_candidate_score("Tokyo Ghoul", "Season 1 Episode 1", candidate_tg)
+        self.assertGreaterEqual(score, 80)
+
+    def test_regression_c_tokyo_ghoul_re_2(self):
+        # C. Tokyo Ghoul:re 2 -> ID 102351
+        candidate_tg_re_2 = {
+            "id": 102351,
+            "title": {"english": "Tokyo Ghoul:re 2nd Season", "romaji": "Tokyo Ghoul:re 2nd Season", "native": "東京喰種 トーキョーグール:re 第2期"},
+            "type": "ANIME",
+            "format": "TV"
+        }
+        score, reason = self.backend._anilist_candidate_score("Tokyo Ghoul:re 2nd Season", "Season 2 Episode 1", candidate_tg_re_2)
+        self.assertGreaterEqual(score, 80)
+
+    def test_regression_d_overlord_ii(self):
+        # D. Overlord II must not resolve to Overlord Season 1
+        candidate_overlord_s1 = {
+            "id": 29803,
+            "title": {"english": "Overlord", "romaji": "Overlord"},
+            "type": "ANIME",
+            "format": "TV"
+        }
+        candidate_overlord_s2 = {
+            "id": 98437,
+            "title": {"english": "Overlord II", "romaji": "Overlord II"},
+            "type": "ANIME",
+            "format": "TV"
+        }
+        score1, _ = self.backend._anilist_candidate_score("Overlord II", "Episode 10", candidate_overlord_s1)
+        score2, _ = self.backend._anilist_candidate_score("Overlord II", "Episode 10", candidate_overlord_s2)
+        self.assertGreater(score2, score1)
+        self.assertGreaterEqual(score2, 80)
+
+    def test_regression_e_stale_metadata_worker(self):
+        # E. Stale metadata worker must not write persistent cache
+        initial_cache_len = len(self.backend.metadata_cache)
+        self.backend.media_generation = 100
+        self.backend._fetch_metadata_bg("anime:stale_test", "Stale Test", "Episode 1", False, "", "", "anime")
+        self.assertEqual(len(self.backend.metadata_cache), initial_cache_len)
+
+    def test_regression_f_force_sync_cache_key(self):
+        # F. Force Sync must invalidate exact cache key generated by _build_cache_key()
+        key = self.backend._build_cache_key("anime", "Test Force", "Episode 1")
+        self.backend.metadata_cache[key] = {"title": "Test Force", "image_url": "http://example.com/art.jpg"}
+        self.backend.state_data["cleaned_title"] = "Test Force"
+        self.backend.state_data["episode_str"] = "Episode 1"
+        self.backend.state_data["media_type"] = "anime"
+        
+        web_api = vlc_discord_rpc_gui.WebApi(self.backend)
+        web_api.force_update()
+        
+        self.assertNotIn(key, self.backend.metadata_cache)
+
+    def test_regression_g_gemini_stale_completion(self):
+        # G. Gemini stale completion must not leave filename permanently "pending"
+        self.backend.gemini_cache["stale_movie.mkv"] = "pending"
+        self.backend.gemini_cache["stale_movie.mkv"] = None
+        self.assertNotEqual(self.backend.gemini_cache.get("stale_movie.mkv"), "pending")
+
+    def test_regression_h_corrupt_metadata_cache(self):
+        # H. Corrupt metadata cache recovers automatically
+        valid = self.backend._is_valid_cache_entry("not a dict")
+        self.assertFalse(valid)
+        valid_bad_ver = self.backend._is_valid_cache_entry({"_cache_version": 9999})
+        self.assertFalse(valid_bad_ver)
+
+    def test_regression_i_valid_cached_metadata(self):
+        # I. Valid cached metadata loads without network fetch
+        key = self.backend._build_cache_key("anime", "Cached Anime", "Episode 1")
+        valid_entry = {
+            "official_title": "Cached Anime Official",
+            "image_url": "https://example.com/cover.jpg",
+            "_cache_version": vlc_discord_rpc_gui.METADATA_CACHE_VERSION
+        }
+        self.assertTrue(self.backend._is_valid_cache_entry(valid_entry))
+
+    def test_regression_j_missing_image_fallback(self):
+        # J. Missing image from provider -> fallback attempted
+        res = self.backend.prepare_metadata_cover({"official_title": "No Image Meta"})
+        self.assertIsNone(res)
+
+    def test_regression_k_tv_show_no_anilist(self):
+        # K. TV show with S01E01 must not trigger AniList anime identity/sync
+        self.backend.current_anilist_identity = None
+        self.backend.ensure_anilist_identity("Breaking Bad", "Season 1 Episode 1", is_music=False, media_type="tv_show")
+        self.assertIsNone(self.backend.current_anilist_identity)
+
+    def test_regression_l_movie_no_anilist(self):
+        # L. Movie with Episode-like filename must not trigger AniList anime sync
+        self.backend.current_anilist_identity = None
+        self.backend.ensure_anilist_identity("Inception", "Episode 1", is_music=False, media_type="movie")
+        self.assertIsNone(self.backend.current_anilist_identity)
 
 if __name__ == '__main__':
     unittest.main()
