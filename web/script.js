@@ -68,20 +68,21 @@ window.updateState = function(state) {
     if (isPlaying) {
         idleState.style.display = 'none';
         activeState.style.display = 'flex';
-
-        // Cover image - snapshot first, then episode-specific online cover, fallback to VLC embedded art
+        // Cover image hierarchy: scene snapshot -> metadata.image_url -> metadata.image_data_uri -> VLC embedded art -> placeholder
         const coverEl = document.getElementById('hero-cover');
         const snapshotUrl = state.scene_snapshot_data_uri || state.scene_snapshot_url || '';
-        const onlineImgUrl = (state.metadata && (state.metadata.image_data_uri || state.metadata.image_url)) || '';
+        const onlineImgUrl = (state.metadata && (state.metadata.image_url || state.metadata.image_data_uri)) || '';
         const localImgUrl = state.local_arturl || '';
         const imgUrl = snapshotUrl || onlineImgUrl || localImgUrl || '';
 
         coverEl.onerror = () => {
-            if (localImgUrl && coverEl.dataset.fallbackTried !== 'local') {
+            console.warn('[Frontend Cover Error] Failed to load:', coverEl.src);
+            if (localImgUrl && coverEl.dataset.fallbackTried !== 'local' && coverEl.src !== localImgUrl) {
                 coverEl.dataset.fallbackTried = 'local';
                 coverEl.src = localImgUrl;
                 heroBgBlur.style.backgroundImage = `url(${localImgUrl})`;
                 heroBgBlur.style.opacity = '1';
+                coverEl.style.opacity = '1';
                 return;
             }
             coverEl.dataset.fallbackTried = 'placeholder';
@@ -89,13 +90,7 @@ window.updateState = function(state) {
             coverEl.style.opacity = '0.3';
             heroBgBlur.style.opacity = '0';
         };
-        
-        if (!imgUrl) {
-            coverEl.style.opacity = '0.3';
-        } else {
-            coverEl.style.opacity = '1';
-        }
-        
+
         if (state.metadata && state.metadata.dominant_color) {
             document.documentElement.style.setProperty('--glow-color', state.metadata.dominant_color);
         } else {
@@ -108,11 +103,12 @@ window.updateState = function(state) {
             coverEl.src = imgUrl;
             heroBgBlur.style.backgroundImage = `url(${imgUrl})`;
             heroBgBlur.style.opacity = '1';
-        } else if (!imgUrl) {
+            coverEl.style.opacity = '1';
+        } else if (!imgUrl && coverEl.dataset.fallbackTried !== 'placeholder') {
             coverEl.dataset.requestedSrc = '';
             coverEl.dataset.fallbackTried = 'placeholder';
             coverEl.src = COVER_PLACEHOLDER;
-            heroBgBlur.style.opacity = '0';
+            coverEl.style.opacity = '0.3';
         }
 
         // Badge
