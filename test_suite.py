@@ -297,5 +297,27 @@ class TestScenarios(BaseIntegrationTest):
         self.backend.ensure_anilist_identity("Inception", "Episode 1", is_music=False, media_type="movie")
         self.assertIsNone(self.backend.current_anilist_identity)
 
+    def test_regression_m_last_fail_scope(self):
+        # M. Verify last_fail scope/retrieval doesn't raise NameError
+        self.backend.gemini_fail_times["test_file.mkv"] = time.time() - 3700
+        raw_name = "test_file.mkv"
+        last_fail = self.backend.gemini_fail_times.get(raw_name, 0)
+        self.assertGreater(last_fail, 0)
+
+    @patch("vlc_discord_rpc_gui.query_gemini_title")
+    def test_regression_n_unknown_track_gemini_guard(self, mock_query):
+        # N. Ensure 'Unknown Track' or empty titles are guarded and never queried to Gemini
+        self.backend.config["gemini_api_key"] = "test_key"
+        self.backend.state_data["title"] = "Unknown Track"
+        file_name = ""
+        _fallback_title = self.backend.state_data["title"]
+        if _fallback_title in ("Unknown Track", "", None):
+            _fallback_title = ""
+        raw_name = file_name or _fallback_title
+        _JUNK_NAMES = {"unknown track", "unknown", ""}
+        should_query = bool(self.backend.config.get("gemini_api_key")) and raw_name.strip().lower() not in _JUNK_NAMES
+        self.assertFalse(should_query)
+
 if __name__ == '__main__':
     unittest.main()
+

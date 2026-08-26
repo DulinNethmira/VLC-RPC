@@ -236,7 +236,7 @@ COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
 
 
-CURRENT_VERSION = "5.4.0"
+CURRENT_VERSION = "5.5.0"
 
 
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
@@ -319,7 +319,7 @@ def query_gemini_title(filename, api_key, logger=None):
         return None
 
     # Recommended header-based authentication instead of URL query param
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     headers = {
         "x-goog-api-key": api_key,
         "Content-Type": "application/json"
@@ -5358,7 +5358,12 @@ class RPCBackend:
                     # Parse filename first so episode-to-episode switches are detected.
 
 
-                    raw_name = file_name or self.state_data["title"]
+                    # Use file_name as the Gemini query source; fall back to title only if it
+                    # looks like a real title (not VLC's generic placeholder).
+                    _fallback_title = self.state_data["title"]
+                    if _fallback_title in ("Unknown Track", "", None):
+                        _fallback_title = ""
+                    raw_name = file_name or _fallback_title
 
 
                     gemini_key = self.config.get("gemini_api_key", "").strip()
@@ -5370,7 +5375,8 @@ class RPCBackend:
 
 
 
-                    if gemini_key:
+                    _JUNK_NAMES = {"unknown track", "unknown", ""}
+                    if gemini_key and raw_name.strip().lower() not in _JUNK_NAMES:
 
 
                         cached = self.gemini_cache.get(raw_name)
@@ -5384,6 +5390,7 @@ class RPCBackend:
                                 self.gemini_cache[raw_name] = None
                                 cached = None
 
+                        last_fail = self.gemini_fail_times.get(raw_name, 0)
                         should_try = (
                             raw_name not in self.gemini_cache
                             or (cached is None and time.time() - last_fail > 3600)
@@ -5884,47 +5891,31 @@ class RPCBackend:
             except Exception as e:
 
 
-                if self.state_data.get("vlc_connected"):
-
-
-                    self.log(f"VLC error: {e}")
-                    self._set_health("vlc", "DISCONNECTED")
-
-
-                self.state_data["vlc_connected"] = False
-
-
-                self.state_data["playback_state"] = "stopped"
-
-
-                self.state_data["title"] = ""
-
-
-                self.state_data["cleaned_title"] = ""
-
-
-                self.state_data["episode_str"] = ""
-
-
-                self.state_data["metadata"] = None
-
-
-                self.state_data["local_image_path"] = None
-
-
-                self.state_data["local_arturl"] = ""
-
-
-                self.state_data["_last_art_key"] = ""
-
-
-                self.state_data["_last_art_uri"] = ""
-
-
-                self.state_data["scene_snapshot_url"] = ""
-
-
-                self.discord_manager.clear_activity(self.media_generation)
+                # Only treat this as a VLC disconnect if the error is actually
+                # a network/response failure (RequestException is caught above).
+                # Pure internal Python exceptions (NameError, KeyError, etc.)
+                # must NOT trigger the VLC disconnect path.
+                import requests as _requests_mod
+                if isinstance(e, _requests_mod.exceptions.RequestException):
+                    if self.state_data.get("vlc_connected"):
+                        self.log("VLC connection lost.")
+                        self._set_health("vlc", "DISCONNECTED")
+                    self.state_data["vlc_connected"] = False
+                    self.state_data["playback_state"] = "stopped"
+                    self.state_data["title"] = ""
+                    self.state_data["cleaned_title"] = ""
+                    self.state_data["episode_str"] = ""
+                    self.state_data["metadata"] = None
+                    self.state_data["local_image_path"] = None
+                    self.state_data["local_arturl"] = ""
+                    self.state_data["_last_art_key"] = ""
+                    self.state_data["_last_art_uri"] = ""
+                    self.state_data["scene_snapshot_url"] = ""
+                    self.discord_manager.clear_activity(self.media_generation)
+                else:
+                    # Internal error: log it but do NOT clear VLC state or
+                    # falsely report a VLC disconnect.
+                    self.log(f"VLC worker error (internal): {type(e).__name__}: {e}")
                 continue
 
 
