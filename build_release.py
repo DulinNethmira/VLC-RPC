@@ -73,7 +73,7 @@ Enjoy the new update! 🎉"""
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)
         
         # Inno Setup output is usually VLC RPC Setup.exe in dist folder
-        file_path = r"dist\VLC RPC Setup.exe"
+        file_path = f"dist\\VLC RPC Setup {tag_name}.exe"
         if not os.path.exists(file_path):
             print(f"No setup executable found at {file_path}")
             sys.exit(1)
