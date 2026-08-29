@@ -1,10 +1,10 @@
 [Setup]
 AppName=VLC RPC
-AppVersion=5.6.0
+AppVersion=5.6.1
 DefaultDirName={pf}\VLC RPC
 DefaultGroupName=VLC RPC
 OutputDir=dist
-OutputBaseFilename=VLC RPC Setup v5.6.0
+OutputBaseFilename=VLC RPC Setup v5.6.1
 SetupIconFile=web\icon.ico
 UninstallDisplayIcon={app}\VLC RPC.exe
 Compression=lzma2

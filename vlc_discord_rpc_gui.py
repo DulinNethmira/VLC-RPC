@@ -691,11 +691,11 @@ class RPCBackend:
                     return (0,)
             if _parse(latest_tag) > _parse(CURRENT_VERSION):
                 # Find the installer asset download URL
-                download_url = data.get("html_url", "")
+                download_url = ""
                 for asset in data.get("assets", []):
                     name = asset.get("name", "").lower()
                     if name.endswith(".exe") and "setup" in name:
-                        download_url = asset.get("browser_download_url", download_url)
+                        download_url = asset.get("browser_download_url", "")
                         break
                 changelog = data.get("body", "").strip()
                 # Trim changelog to first 400 chars to keep modal compact
@@ -3151,11 +3151,11 @@ class WebApi:
                     except Exception:
                         return (0,)
                 if _parse(latest_tag) > _parse(CURRENT_VERSION):
-                    download_url = data.get("html_url", "")
+                    download_url = ""
                     for asset in data.get("assets", []):
                         name = asset.get("name", "").lower()
                         if name.endswith(".exe") and "setup" in name:
-                            download_url = asset.get("browser_download_url", download_url)
+                            download_url = asset.get("browser_download_url", "")
                             break
                     changelog = data.get("body", "").strip()
                     if len(changelog) > 400:
