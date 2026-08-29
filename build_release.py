@@ -57,37 +57,17 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.0.0"
+    tag_name = "v5.6.2"
     
-    release_title = "🚀 v5.0.0 - The V5 Milestone: Fully Stable & Polished"
-    release_notes = """### 🔥 What's New in v5.0.0!
+    release_title = "✨ v5.6.2 - Metadata & Rewatch Rollback Stability Update"
+    release_notes = """### 🚀 What's New in v5.6.2!
 
-This is a **major milestone release**. VLC RPC is now fully stable, polished, and packed with features. Welcome to Version 5!
+#### 🐛 Metadata & Rewatch Rollback Fixes
+- **Backend Rollback**: Restored the proven and highly stable v5.2.6 AniList Metadata and Rewatching architecture that was inadvertently broken in recent updates. 
+- **Artwork Fix**: Posters and covers will now reliably fetch and display for anime without being overridden by VLC's fallback text!
+- **Discord Presence**: Direct integration with Discord is restored for maximum compatibility and reliability, properly showing genres and ratings.
 
-#### 🎨 Custom Accent Themes
-- **7 Unique Themes**: Choose from Discord Blurple, Ruby Red, Emerald Green, Neon Purple, Sunset Orange, Hot Pink, or Cyan Blue in the Preferences tab!
-
-#### 📊 Anime Wrapped & Advanced Analytics
-- **Anime Wrap Card**: Generate and download a beautiful shareable image of your anime stats directly from the Analytics tab!
-- **Deep Stats**: Total hours watched, Average Session Length, Most Binge-Watched Day, and a 7-day Activity Graph!
-
-#### 📡 Discord Presence Overhaul
-- **RPC Toggle**: Instantly pause/resume your Discord Activity from the Dashboard with one click.
-- **Genre + Rating Display**: Your presence now shows clean genre tags and star ratings from AniList/IMDb.
-- **Fixed Emoji Corruption**: All special characters (⭐, →, —, •, ❌, ✅) in the presence text are now rendered perfectly.
-
-#### ⚡ Startup & Stability Fixes
-- **Startup Freeze Eliminated**: Fixed a deep PyWebView recursion crash that caused the app to hang on "Connecting to engines..." indefinitely.
-- **Encoding Fixed**: Resolved all double-encoded UTF-8 corruption that appeared as garbage characters (â€", â†', âŒ) throughout the app logic.
-- **Gemini Log Spam Fixed**: Eliminated the "Failed to resolve title" log spam — Gemini now auto-retries silently once per hour.
-
-#### 🌐 UI & QoL
-- **Sidebar Version**: Always know what version you're running from the sidebar.
-- **macOS-Style Toasts**: Sleek animated dark-mode notifications for app events.
-- **Auto-Score Popups**: Automatically prompts you to rate an anime when you finish the final episode.
-- **AniSkip Integration**: Auto-skip Openings and Endings based on your AniList episode data.
-
-Enjoy v5! 🎉"""
+Enjoy the new update! 🎉"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)
