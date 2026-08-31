@@ -742,50 +742,18 @@ class RPCBackend:
 
 
         # Load gemini cache
-
-
-        self.gemini_cache_file = 'gemini_cache.json'
-
-
-        self.gemini_cache = {}
-
-
-        try:
-
-
-            import json, os
-
-
-            if os.path.exists(self.gemini_cache_file):
-
-
-                with open(self.gemini_cache_file, 'r', encoding='utf-8') as gcf:
-
-
-                    self.gemini_cache = json.load(gcf)
-
-
-                    # Convert arrays back to tuples since JSON arrays are loaded as lists
-
-
-                    for k, v in self.gemini_cache.items():
-
-
-                        if isinstance(v, list):
-
-
-                            self.gemini_cache[k] = tuple(v)
-
-
-        except Exception:
-
-
-            pass
-
-
-
-
-
+        if getattr(sys, 'frozen', False):
+            application_path = os.path.dirname(sys.executable)
+        else:
+            application_path = os.path.dirname(os.path.abspath(__file__))
+        self.gemini_cache_file = os.path.join(application_path, 'gemini_cache.json')
+        self.gemini_fail_times = {}
+        self.load_gemini_cache()
+        # Media generation counter: incremented on each file transition.
+        # Background threads capture their generation at launch and discard
+        # their result if the counter has advanced by the time they finish.
+        self.media_generation = 0
+        self._media_gen_lock = threading.Lock()
         self.worker_thread = threading.Thread(target=self.rpc_worker, daemon=True)
 
 
@@ -1478,10 +1446,33 @@ class RPCBackend:
                 self.state_data["rewatch_number"] = (media_list or {}).get("repeat") or 1
                 self.state_data["possible_rewatch"] = False
             elif status == "COMPLETED":
-                # User is watching an anime they already completed — possible rewatch
+                # User is watching an anime they already completed - possible rewatch.
+                # Only trigger popup when starting a genuine new rewatch cycle.
                 self.state_data["watch_mode"] = "NORMAL"
                 self.state_data["rewatch_number"] = 0
-                if not self.state_data.get("possible_rewatch"):
+
+                ep_str = self.state_data.get("episode_str", "")
+                import re as _re
+                ep_match = _re.search(r"Episode\s*(\d+)", ep_str or "", _re.IGNORECASE)
+                current_ep = int(ep_match.group(1)) if ep_match else None
+                al_progress = (media_list or {}).get("progress") or 0
+
+                # Cycle dedup key prevents re-triggering for same rewatch pass.
+                repeat_count = (media_list or {}).get("repeat") or 0
+                rewatch_cycle_key = (anilist_id, "rewatch_prompt", repeat_count)
+
+                # Genuine new rewatch: no episode info, ep==1, or ep < progress
+                genuine_rewatch = (
+                    current_ep is None
+                    or current_ep == 1
+                    or (al_progress > 0 and current_ep < al_progress)
+                )
+
+                if (
+                    not self.state_data.get("possible_rewatch")
+                    and genuine_rewatch
+                    and rewatch_cycle_key not in self.scored_episodes
+                ):
                     self.state_data["possible_rewatch"] = True
                     trigger_rewatch_popup = True
             else:
@@ -2029,7 +2020,7 @@ class RPCBackend:
         if not token or not client_id or not access_token:
 
 
-            self.send_webhook_log("âŒ **Discord Widget Skipped:** Missing token, app ID, or access token in settings.")
+            self.send_webhook_log("â Œ **Discord Widget Skipped:** Missing token, app ID, or access token in settings.")
 
 
             return
@@ -2053,7 +2044,7 @@ class RPCBackend:
             if r.status_code != 200:
 
 
-                self.send_webhook_log(f"âŒ **Discord Widget Failed:** AniList stats fetch returned HTTP {r.status_code}")
+                self.send_webhook_log(f"â Œ **Discord Widget Failed:** AniList stats fetch returned HTTP {r.status_code}")
 
 
                 return
@@ -2083,7 +2074,7 @@ class RPCBackend:
             if not stats:
 
 
-                self.send_webhook_log(f"âŒ **Discord Widget Failed:** AniList returned empty stats. Raw response: `{r.text[:150]}`")
+                self.send_webhook_log(f"â Œ **Discord Widget Failed:** AniList returned empty stats. Raw response: `{r.text[:150]}`")
 
 
                 return
@@ -2188,7 +2179,7 @@ class RPCBackend:
             else:
 
 
-                self.send_webhook_log(f"âŒ **Discord Widget Failed:** HTTP {r2.status_code} — `{r2.text[:150]}`")
+                self.send_webhook_log(f"â Œ **Discord Widget Failed:** HTTP {r2.status_code} — `{r2.text[:150]}`")
 
 
         except Exception as e:
@@ -2197,7 +2188,7 @@ class RPCBackend:
             pass
 
 
-            self.send_webhook_log(f"âŒ **Discord Widget Crashed:** `{e}`")
+            self.send_webhook_log(f"â Œ **Discord Widget Crashed:** `{e}`")
 
 
 
@@ -2254,7 +2245,7 @@ class RPCBackend:
                 self.log(f"Widget v2 Failed: AniList HTTP {r.status_code}")
 
 
-                self.send_webhook_log(f"âŒ **Widget v2 Failed:** AniList HTTP {r.status_code}")
+                self.send_webhook_log(f"â Œ **Widget v2 Failed:** AniList HTTP {r.status_code}")
 
 
                 return
@@ -2398,7 +2389,7 @@ class RPCBackend:
                 self.log(f"Widget v2 Failed: HTTP {r2.status_code} — {r2.text[:150]}")
 
 
-                self.send_webhook_log(f"âŒ **Widget v2 Failed:** HTTP {r2.status_code} — `{r2.text[:150]}`")
+                self.send_webhook_log(f"â Œ **Widget v2 Failed:** HTTP {r2.status_code} — `{r2.text[:150]}`")
 
 
         except Exception as e:
@@ -2407,7 +2398,7 @@ class RPCBackend:
             self.log(f"Widget v2 Crashed: {e}")
 
 
-            self.send_webhook_log(f"âŒ **Widget v2 Crashed:** `{e}`")
+            self.send_webhook_log(f"â Œ **Widget v2 Crashed:** `{e}`")
 
 
 
@@ -3276,7 +3267,7 @@ class RPCBackend:
                                 err_msg = exchange_res.json().get("message", "Exchange failed")
 
 
-                                backend_ref.send_webhook_log(f"âŒ **AniList OAuth Failed:** {err_msg}")
+                                backend_ref.send_webhook_log(f"â Œ **AniList OAuth Failed:** {err_msg}")
 
 
                                 self._respond(400, f'{{"success": false, "error": "{err_msg}"}}'.encode(), "application/json")
@@ -3288,7 +3279,7 @@ class RPCBackend:
                             pass
 
 
-                            backend_ref.send_webhook_log(f"âŒ **AniList OAuth Error:** {str(e)}")
+                            backend_ref.send_webhook_log(f"â Œ **AniList OAuth Error:** {str(e)}")
 
 
                             self._respond(500, f'{{"success": false, "error": "{str(e)}"}}'.encode(), "application/json")
@@ -3889,8 +3880,6 @@ class RPCBackend:
 
 
                 "pipe:1"
-
-
             ]
 
 
@@ -4066,54 +4055,57 @@ class RPCBackend:
 
 
     def save_metadata_cache(self):
-
-
         if getattr(sys, 'frozen', False):
-
-
             application_path = os.path.dirname(sys.executable)
-
-
         else:
-
-
             application_path = os.path.dirname(os.path.abspath(__file__))
-
-
         cache_path = os.path.join(application_path, CACHE_FILE)
-
-
-        # Keep AniList identity records beside legacy metadata entries so existing
-        # cache files remain valid and are upgraded lazily.
+        
         self.metadata_cache[ANILIST_IDENTITY_CACHE_KEY] = self.anilist_identity_cache
-
-
         try:
-
-
-            with open(cache_path, "w") as f:
-
-
+            import tempfile
+            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(cache_path), prefix=CACHE_FILE + '.', suffix='.tmp')
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(self.metadata_cache, f, indent=4)
-
-
+            os.replace(tmp_path, cache_path)
         except Exception:
-
-
             pass
 
+    def load_gemini_cache(self):
+        self.gemini_cache = {}
+        if os.path.exists(self.gemini_cache_file):
+            try:
+                with open(self.gemini_cache_file, 'r', encoding='utf-8') as gcf:
+                    loaded = json.load(gcf)
+                for k, v in loaded.items():
+                    if v != 'pending':
+                        if isinstance(v, list):
+                            self.gemini_cache[k] = tuple(v)
+                        else:
+                            self.gemini_cache[k] = v
+            except Exception:
+                pass
 
+    def save_gemini_cache(self):
+        try:
+            import tempfile
+            clean_cache = {k: v for k, v in self.gemini_cache.items() if v != 'pending'}
+            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(self.gemini_cache_file), prefix='gemini_cache.json.', suffix='.tmp')
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(clean_cache, f, indent=4)
+            os.replace(tmp_path, self.gemini_cache_file)
+        except Exception:
+            pass
 
+    def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist, input_uri="", media_type_hint="", generation=None):
+        """Fetch metadata in a background thread so the main loop stays fast.
 
-
-
-
-
-    def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist, input_uri="", media_type_hint=""):
-
-
-        """Fetch metadata in a background thread so the main loop stays fast."""
-
+        ``generation`` is the media_generation value captured when the thread
+        was spawned.  If the counter has advanced by the time results arrive
+        the worker exits silently, preventing old metadata overwriting new.
+        """
+        if generation is not None and generation != self.media_generation:
+            return  # Stale – a newer file is already being processed
 
         try:
 
@@ -4424,6 +4416,8 @@ class RPCBackend:
             # but input_uri hasn't changed (same file, title just got resolved by Gemini).
 
 
+            # Discard if generation advanced (new file) OR the file URL changed.
+            stale_gen = (generation is not None and generation != self.media_generation)
             still_same_file = (
 
 
@@ -4437,6 +4431,8 @@ class RPCBackend:
 
 
             )
+            if stale_gen:
+                still_same_file = False
 
 
             if still_same_file:
@@ -4690,6 +4686,9 @@ class RPCBackend:
 
                         # metadata is resolving, so the UI never shows the previous item.
 
+                        # Advance generation so stale background workers discard results.
+                        with self._media_gen_lock:
+                            self.media_generation += 1
 
                         self.state_data["_last_art_key"] = art_identity
 
@@ -4940,11 +4939,20 @@ class RPCBackend:
                             self.gemini_cache[raw_name] = "pending"
 
 
-                            def _run_gemini(name, key):
+                            def _run_gemini(name, key, gen):
+                                # Always clear pending in every terminal path.
+                                try:
+                                    t, e, mt = media_identity_to_display(query_gemini_title(name, key))
+                                except Exception as _ge:
+                                    self.gemini_cache[name] = None
+                                    self.gemini_fail_times[name] = time.time()
+                                    self.anilist_log(f"[Gemini AI] Exception resolving title: {_ge}")
+                                    return
 
-
-                                t, e, mt = media_identity_to_display(query_gemini_title(name, key))
-
+                                # Stale generation: another file loaded – discard but clear pending.
+                                if gen != self.media_generation:
+                                    self.gemini_cache[name] = None
+                                    return
 
                                 if t:
 
@@ -4955,22 +4963,7 @@ class RPCBackend:
                                     self.anilist_log(f"[Gemini AI] Match: {t} {e}")
 
 
-                                    try:
-
-
-                                        import json
-
-
-                                        with open(self.gemini_cache_file, 'w', encoding='utf-8') as gcf:
-
-
-                                            json.dump(self.gemini_cache, gcf)
-
-
-                                    except Exception:
-
-
-                                        pass
+                                    self.save_gemini_cache()
 
 
                                 else:
@@ -4988,7 +4981,7 @@ class RPCBackend:
                                     self.anilist_log(f"[Gemini AI] Failed to resolve title. (Auto-retry in 1h)")
 
 
-                            threading.Thread(target=_run_gemini, args=(raw_name, gemini_key), daemon=True).start()
+                            threading.Thread(target=_run_gemini, args=(raw_name, gemini_key, self.media_generation), daemon=True).start()
 
 
 
@@ -5257,7 +5250,8 @@ class RPCBackend:
                                     self.log(f"Playing '{cleaned_title}' (Refreshing bad metadata cache...)")
 
 
-                                    fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], art_identity, media_type)
+                                    _cur_gen = self.media_generation
+                                    fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], art_identity, media_type, _cur_gen)
 
 
                                     threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
@@ -5278,7 +5272,8 @@ class RPCBackend:
                                 self.log(f"Playing '{cleaned_title}' (Fetching metadata...)")
 
 
-                                fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], art_identity, media_type)
+                                _cur_gen = self.media_generation
+                                fetch_args = (cache_key, cleaned_title, episode_str, is_music, self.state_data["artist"], art_identity, media_type, _cur_gen)
 
 
                                 threading.Thread(target=self._fetch_metadata_bg, args=fetch_args, daemon=True).start()
@@ -5493,6 +5488,11 @@ class RPCBackend:
 
                     self.state_data["status_message"] = "Connected to Discord."
 
+                    # Reset last-sent kwargs so presence is re-pushed immediately
+                    # after reconnection rather than waiting for the next change.
+                    self._last_rpc_kwargs = {}
+                    self._last_rpc_cleared = False
+
 
                     self.log(f"Connected to Discord RPC (Client ID: {desired_client_id})")
 
@@ -5515,10 +5515,11 @@ class RPCBackend:
                     current_client_id = None
 
 
-                    if self.state_data.get("rpc_connected", True):
+                    _was_connected = self.state_data.get("rpc_connected", False)
+                    if _was_connected:
 
 
-                        self.log("Discord not found — retrying...")
+                        self.log("Discord RPC disconnected — retrying with backoff...")
 
 
                     self.state_data["rpc_connected"] = False
