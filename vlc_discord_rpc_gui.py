@@ -72,7 +72,7 @@ ANILIST_IDENTITY_CONFIDENCE = 95
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "5.6.2"
+CURRENT_VERSION = "5.6.3"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 DEFAULT_CONFIG = {
     "client_id": DEFAULT_CLIENT_ID,
@@ -5559,9 +5559,15 @@ class RPCBackend:
 
 
                         except Exception:
-
-
-                            pass
+                            try:
+                                rpc.close()
+                            except Exception:
+                                pass
+                            rpc = None
+                            current_client_id = None
+                            self.state_data["rpc_connected"] = False
+                            rpc_reconnect_at = time.time() + rpc_backoff
+                            rpc_backoff = min(rpc_backoff * 2, 30)
 
 
                 else:
@@ -6272,6 +6278,23 @@ class RPCBackend:
 
 
 
+
+            if rpc and self.state_data["rpc_connected"]:
+                _idle_secs = time.time() - getattr(self, "_last_rpc_update_time", 0)
+                if _idle_secs > 60:
+                    try:
+                        rpc.clear()
+                        self._last_rpc_update_time = time.time()
+                    except Exception:
+                        try:
+                            rpc.close()
+                        except Exception:
+                            pass
+                        rpc = None
+                        current_client_id = None
+                        self.state_data["rpc_connected"] = False
+                        rpc_reconnect_at = time.time() + rpc_backoff
+                        rpc_backoff = min(rpc_backoff * 2, 30)
 
             update_interval = self.config.get("update_interval", 2)
 
