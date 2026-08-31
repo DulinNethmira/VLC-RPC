@@ -57,15 +57,20 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.6.2"
+    tag_name = "v5.6.4"
     
-    release_title = "✨ v5.6.2 - Metadata & Rewatch Rollback Stability Update"
-    release_notes = """### 🚀 What's New in v5.6.2!
+    release_title = "✨ v5.6.4 - Rock-Solid Discord Connection & Dead Pipe Recovery"
+    release_notes = """### 🚀 What's New in v5.6.4!
 
-#### 🐛 Metadata & Rewatch Rollback Fixes
-- **Backend Rollback**: Restored the proven and highly stable v5.2.6 AniList Metadata and Rewatching architecture that was inadvertently broken in recent updates. 
-- **Artwork Fix**: Posters and covers will now reliably fetch and display for anime without being overridden by VLC's fallback text!
-- **Discord Presence**: Direct integration with Discord is restored for maximum compatibility and reliability, properly showing genres and ratings.
+#### 🔌 Discord RPC Connection Overhaul
+- **Dead Pipe Recovery**: Fixed a critical bug where the Discord IPC socket could silently die (e.g., Discord restart/crash) and never reconnect. The dashboard would show a permanent grey dot. Now the system detects dead pipes and auto-recovers!
+- **Heartbeat Ping**: Added a 60-second keepalive probe that detects stale Discord connections during idle periods, so the status indicator always reflects reality.
+- **`clear()` Failure Handling**: When clearing Discord presence fails due to a broken pipe, the system now properly tears down the connection and schedules a backoff reconnect instead of silently failing.
+
+#### 🛡️ Reliability (from v5.6.3)
+- **Smarter Rewatch Detection**: No more false rewatch popups when resuming a completed anime on its final episode.
+- **Atomic Cache Saves**: Metadata and Gemini caches now use atomic writes, preventing corruption on unexpected shutdowns.
+- **Episode Transition Safety**: Background threads can no longer overwrite new episode metadata with stale results.
 
 Enjoy the new update! 🎉"""
 
