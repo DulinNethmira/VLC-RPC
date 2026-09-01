@@ -57,22 +57,19 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.6.4"
+    tag_name = "v5.6.6"
     
-    release_title = "✨ v5.6.4 - Rock-Solid Discord Connection & Dead Pipe Recovery"
-    release_notes = """### 🚀 What's New in v5.6.4!
+    release_title = "✨ v5.6.6 - Hotfix: Discord RPC Media Recognition"
+    release_notes = """### 🚀 What's New in v5.6.6!
 
-#### 🔌 Discord RPC Connection Overhaul
-- **Dead Pipe Recovery**: Fixed a critical bug where the Discord IPC socket could silently die (e.g., Discord restart/crash) and never reconnect. The dashboard would show a permanent grey dot. Now the system detects dead pipes and auto-recovers!
-- **Heartbeat Ping**: Added a 60-second keepalive probe that detects stale Discord connections during idle periods, so the status indicator always reflects reality.
-- **`clear()` Failure Handling**: When clearing Discord presence fails due to a broken pipe, the system now properly tears down the connection and schedules a backoff reconnect instead of silently failing.
+#### 🚑 Critical Hotfix
+- **Media Recognition Fixed**: Fixed a critical bug in `v5.6.5` where the new asynchronous Discord pipeline accidentally dropped the metadata parsing block, causing the tool to think nothing was playing. The logic has been properly restored and media recognition is now working perfectly again alongside the new anti-freeze asynchronous system!
 
-#### 🛡️ Reliability (from v5.6.3)
-- **Smarter Rewatch Detection**: No more false rewatch popups when resuming a completed anime on its final episode.
-- **Atomic Cache Saves**: Metadata and Gemini caches now use atomic writes, preventing corruption on unexpected shutdowns.
-- **Episode Transition Safety**: Background threads can no longer overwrite new episode metadata with stale results.
+#### ⚡ Asynchronous Discord RPC (from v5.6.5)
+- **Completely Decoupled**: The Discord IPC updates have been moved entirely to a dedicated background thread (`DiscordManager`). 
+- **Instant Responsiveness**: Previously, if Discord was busy or dropped packets, pausing/resuming media in VLC would freeze the entire tracking tool for 1-2 minutes. Now, the main event loop never blocks, ensuring your playback state and UI updates instantly while Discord catches up seamlessly in the background!
 
-Enjoy the new update! 🎉"""
+Enjoy the hotfix! 🎉"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)
