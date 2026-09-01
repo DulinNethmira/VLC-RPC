@@ -57,20 +57,18 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.6.4"
+    tag_name = "v5.6.5"
     
-    release_title = "✨ v5.6.4 - Rock-Solid Discord Connection & Dead Pipe Recovery"
-    release_notes = """### 🚀 What's New in v5.6.4!
+    release_title = "✨ v5.6.5 - Asynchronous Discord & Hardened Caching"
+    release_notes = """### 🚀 What's New in v5.6.5!
 
-#### 🔌 Discord RPC Connection Overhaul
-- **Dead Pipe Recovery**: Fixed a critical bug where the Discord IPC socket could silently die (e.g., Discord restart/crash) and never reconnect. The dashboard would show a permanent grey dot. Now the system detects dead pipes and auto-recovers!
-- **Heartbeat Ping**: Added a 60-second keepalive probe that detects stale Discord connections during idle periods, so the status indicator always reflects reality.
-- **`clear()` Failure Handling**: When clearing Discord presence fails due to a broken pipe, the system now properly tears down the connection and schedules a backoff reconnect instead of silently failing.
+#### ⚡ Asynchronous Discord RPC (No More Freezes!)
+- **Completely Decoupled**: The Discord IPC updates have been moved entirely to a dedicated background thread (`DiscordManager`). 
+- **Instant Responsiveness**: Previously, if Discord was busy or dropped packets, pausing/resuming media in VLC would freeze the entire tracking tool for 1-2 minutes. Now, the main event loop never blocks, ensuring your playback state and UI updates instantly while Discord catches up seamlessly in the background!
 
-#### 🛡️ Reliability (from v5.6.3)
-- **Smarter Rewatch Detection**: No more false rewatch popups when resuming a completed anime on its final episode.
-- **Atomic Cache Saves**: Metadata and Gemini caches now use atomic writes, preventing corruption on unexpected shutdowns.
-- **Episode Transition Safety**: Background threads can no longer overwrite new episode metadata with stale results.
+#### 🛡️ Hardened Metadata Cache
+- **No More "Stuck" Metadata**: Fixed a bug where temporary network failures or rate limits would save an empty `None` state permanently to the `gemini_cache.json` and `metadata_cache.json` files on your disk.
+- **Auto-Recovery**: The tool now cleanly isolates failed fetches strictly in-memory. If the API fails, you no longer have to manually close the tool and delete the cache files. Simply restart, and the cache will automatically heal and retry.
 
 Enjoy the new update! 🎉"""
 

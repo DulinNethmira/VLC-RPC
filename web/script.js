@@ -776,6 +776,38 @@ function loadAnalytics() {
             .reduce((acc, h) => acc + (h.duration || 0), 0);
         document.getElementById('ana-today-hours').textContent = (todaySec / 3600).toFixed(1);
 
+        // ── Avg Session (Mins) ──
+        const historyCount = (stats.history || []).length;
+        const avgSessionMins = historyCount > 0 ? (totalSec / 60) / historyCount : 0;
+        document.getElementById('ana-avg-session').textContent = avgSessionMins > 0 ? Math.round(avgSessionMins) : '--';
+
+        // ── Most Binge-Watched Day ──
+        const dailyWatch = {};
+        (stats.history || []).forEach(h => {
+            if (!h.timestamp) return;
+            const dateStr = h.timestamp.slice(0, 10);
+            dailyWatch[dateStr] = (dailyWatch[dateStr] || 0) + (h.duration || 0);
+        });
+        
+        let maxBingeDay = '--';
+        let maxBingeSec = 0;
+        for (const [dateStr, sec] of Object.entries(dailyWatch)) {
+            if (sec > maxBingeSec) {
+                maxBingeSec = sec;
+                maxBingeDay = dateStr;
+            }
+        }
+        
+        if (maxBingeSec > 0) {
+            const d = new Date(maxBingeDay);
+            // Example: "Mon, Oct 12"
+            const options = { weekday: 'short', month: 'short', day: 'numeric' };
+            // Ensure local timezone doesn't shift the parsed date
+            const localD = new Date(d.getTime() + d.getTimezoneOffset() * 60000); 
+            maxBingeDay = localD.toLocaleDateString(undefined, options);
+        }
+        document.getElementById('ana-binge-day').textContent = maxBingeDay;
+
         // ── 7-Day Chart ──────────────────────────────────────────────────
         const labels = [];
         const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
