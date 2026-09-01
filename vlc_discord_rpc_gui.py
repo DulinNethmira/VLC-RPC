@@ -72,7 +72,7 @@ ANILIST_IDENTITY_CONFIDENCE = 95
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "5.6.4"
+CURRENT_VERSION = "5.6.6"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 DEFAULT_CONFIG = {
     "client_id": DEFAULT_CLIENT_ID,
@@ -754,9 +754,10 @@ class RPCBackend:
         # their result if the counter has advanced by the time they finish.
         self.media_generation = 0
         self._media_gen_lock = threading.Lock()
+        self.discord_manager = DiscordManager(self, self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID)
+        self.discord_manager.start()
+
         self.worker_thread = threading.Thread(target=self.rpc_worker, daemon=True)
-
-
         self.worker_thread.start()
 
 
@@ -4089,7 +4090,7 @@ class RPCBackend:
     def save_gemini_cache(self):
         try:
             import tempfile
-            clean_cache = {k: v for k, v in self.gemini_cache.items() if v != 'pending'}
+            clean_cache = {k: v for k, v in self.gemini_cache.items() if v != 'pending' and v is not None}
             fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(self.gemini_cache_file), prefix='gemini_cache.json.', suffix='.tmp')
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(clean_cache, f, indent=4)
@@ -4398,7 +4399,8 @@ class RPCBackend:
                 self.metadata_cache[cache_key] = metadata
 
 
-                self.save_metadata_cache()
+                if metadata.get("image_url"):
+                    self.save_metadata_cache()
 
 
 
@@ -4507,22 +4509,7 @@ class RPCBackend:
     def rpc_worker(self):
 
 
-        asyncio.set_event_loop(asyncio.new_event_loop())
-
-
-        rpc = None
-
-
-        current_client_id = None
-
-
         last_track_key = None
-
-
-        rpc_backoff = 1          # seconds to wait before next reconnect attempt
-
-
-        rpc_reconnect_at = 0.0   # earliest epoch time allowed for a reconnect
 
 
         
@@ -5441,136 +5428,16 @@ class RPCBackend:
 
 
 
-            if rpc and current_client_id != desired_client_id:
 
 
-                try:
 
 
-                    rpc.close()
 
-
-                except Exception:
-
-
-                    pass
-
-
-                rpc = None
-
-
-                self.state_data["rpc_connected"] = False
-
-
-                self.log(f"Closing Discord RPC (Client ID changed to {desired_client_id})")
-
-
-
-
-
-            if not rpc and time.time() >= rpc_reconnect_at:
-
-
-                try:
-
-
-                    rpc = Presence(desired_client_id)
-
-
-                    rpc.connect()
-
-
-                    current_client_id = desired_client_id
-
-
-                    self.state_data["rpc_connected"] = True
-
-
-                    self.state_data["status_message"] = "Connected to Discord."
-
-                    # Reset last-sent kwargs so presence is re-pushed immediately
-                    # after reconnection rather than waiting for the next change.
-                    self._last_rpc_kwargs = {}
-                    self._last_rpc_cleared = False
-
-
-                    self.log(f"Connected to Discord RPC (Client ID: {desired_client_id})")
-
-
-                    show_toast("VLC RPC", "Connected to Discord!", icon="success")
-
-
-                    rpc_backoff = 1       # reset on successful connect
-
-
-                    rpc_reconnect_at = 0.0
-
-
-                except Exception:
-
-
-                    rpc = None
-
-
-                    current_client_id = None
-
-
-                    _was_connected = self.state_data.get("rpc_connected", False)
-                    if _was_connected:
-
-
-                        self.log("Discord RPC disconnected — retrying with backoff...")
-
-
-                    self.state_data["rpc_connected"] = False
-
-
-                    self.state_data["status_message"] = "Discord not found — retrying..."
-
-
-                    rpc_reconnect_at = time.time() + rpc_backoff
-
-
-                    rpc_backoff = min(rpc_backoff * 2, 30)  # exponential backoff, cap 30 s
-
-
-
-
-
-            if rpc and self.state_data["rpc_connected"]:
-
-
-                if not getattr(self, 'rpc_enabled', True) or not self.state_data["vlc_connected"] or self.state_data["playback_state"] not in ["playing", "paused"]:
-
-
-                    if not getattr(self, "_last_rpc_cleared", False):
-
-
-                        try:
-
-
-                            rpc.clear()
-
-
-                            self._last_rpc_cleared = True
-
-
-                            self._last_rpc_kwargs = {}
-
-
-                        except Exception:
-                            try:
-                                rpc.close()
-                            except Exception:
-                                pass
-                            rpc = None
-                            current_client_id = None
-                            self.state_data["rpc_connected"] = False
-                            rpc_reconnect_at = time.time() + rpc_backoff
-                            rpc_backoff = min(rpc_backoff * 2, 30)
-
-
-                else:
+            rpc_should_clear = not getattr(self, "rpc_enabled", True) or not self.state_data.get("vlc_connected") or self.state_data.get("playback_state") not in ["playing", "paused"]
+            if rpc_should_clear:
+                if getattr(self, "discord_manager", None):
+                    self.discord_manager.clear_activity(self.media_generation)
+            else:
 
 
                     self._last_rpc_cleared = False
@@ -6213,89 +6080,14 @@ class RPCBackend:
 
 
 
-                        last_kwargs = getattr(self, "_last_rpc_kwargs", {})
-
-
-                        if _is_significant_change(last_kwargs, kwargs):
-
-
-                            now = time.time()
-
-
-                            last_update = getattr(self, "_last_rpc_update_time", 0)
-
-
-                            # Discord IPC strictly rate-limits updates (usually max 1 per 15s).
-
-
-                            # Buffering it to 5s is a good balance and prevents dropping connections.
-
-
-                            if now - last_update >= 5:
-
-
-                                rpc.update(**kwargs)
-
-
-                                self._last_rpc_kwargs = kwargs.copy()
-
-
-                                self._last_rpc_update_time = now
-
-
+                        if getattr(self, "discord_manager", None):
+                            self.discord_manager.submit_activity(self.media_generation, desired_client_id, kwargs)
                     except Exception:
-
-
-                        # RPC update failed — close and schedule reconnect with backoff
-
-
-                        try:
-
-
-                            rpc.close()
-
-
-                        except Exception:
-
-
-                            pass
-
-
-                        rpc = None
-
-
-                        current_client_id = None
-
-
-                        self.state_data["rpc_connected"] = False
-
-
-                        rpc_reconnect_at = time.time() + rpc_backoff
-
-
-                        rpc_backoff = min(rpc_backoff * 2, 30)
-
-
-
-
-
-            if rpc and self.state_data["rpc_connected"]:
-                _idle_secs = time.time() - getattr(self, "_last_rpc_update_time", 0)
-                if _idle_secs > 60:
-                    try:
-                        rpc.clear()
-                        self._last_rpc_update_time = time.time()
-                    except Exception:
-                        try:
-                            rpc.close()
-                        except Exception:
-                            pass
-                        rpc = None
-                        current_client_id = None
-                        self.state_data["rpc_connected"] = False
-                        rpc_reconnect_at = time.time() + rpc_backoff
-                        rpc_backoff = min(rpc_backoff * 2, 30)
-
+                        pass
+            if getattr(self, "discord_manager", None):
+                _idle_secs = time.time() - getattr(self.discord_manager, "last_update_time", 0)
+                if _idle_secs > 60 and self.discord_manager.current_kwargs:
+                    self.discord_manager.clear_activity(self.media_generation)
             update_interval = self.config.get("update_interval", 2)
 
 
