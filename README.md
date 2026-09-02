@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=0:6366f1,100:8b5cf6&height=250&section=header&text=VLC%20Discord%20RPC&fontSize=70&fontColor=ffffff&animation=twinkling&desc=The%20Ultimate%20Media%20Companion&descAlignY=76&descAlign=62" width="100%" />
 
-  <img src="https://readme-typing-svg.demolab.com?font=Outfit&size=20&pause=1000&color=8B5CF6&center=true&vCenter=true&width=600&lines=Discord+Rich+Presence+for+VLC;Auto-Track+Anime+on+AniList;Advanced+Analytics+%26+Dashboard;The+Ultimate+Media+Companion" alt="Typing SVG" />
+  <img src="https://readme-typing-svg.demolab.com?font=Outfit&size=20&pause=1000&color=8B5CF6&center=true&vCenter=true&width=600&lines=Discord+Rich+Presence+for+VLC;Auto-Track+Anime+on+AniList;Fully+Offline+Local+Media+Library;Advanced+Analytics+%26+Dashboard;The+Ultimate+Media+Companion" alt="Typing SVG" />
 
   <br>
 
@@ -45,6 +45,15 @@ VLC RPC seamlessly connects your VLC Media Player to Discord. It shows your frie
   - **Modern WebView UI** — Beautiful glassmorphism design with ambient glow effects, 3D hover animations, and built with the modern Outfit font family.
   - **Live Discord Preview & Toggle** — See exactly how your rich presence will look on Discord inside the app in real-time. Instantly toggle your Discord Activity ON/OFF directly from the Dashboard with a single click.
   - **macOS-Style Toasts** — Elegant, animated dark-mode toast notifications for app events!
+</details>
+
+<details open>
+  <summary><b>📁 Local Media Library</b></summary>
+  <br>
+  
+  - **Offline Media Management** — Add folders and let the background scanner seamlessly organize your Anime, Movies, TV Shows, and Music without requiring an internet connection.
+  - **Smart Continue Watching** — Uses identity-based progress mapping to place unfinished episodes right on your dashboard.
+  - **One-Click Playback** — Instantly launch any local file directly into your active VLC player with perfect Unicode path handling.
 </details>
 
 <details open>
