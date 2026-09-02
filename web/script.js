@@ -1098,10 +1098,12 @@ window.renderLibrary = function() {
         if(isAnime && m.title) {
             let groupKey = m.anilist_id ? `al_${m.anilist_id}` : `title_${m.title}`;
             if(!seriesMap[groupKey]) {
-                seriesMap[groupKey] = {...m, is_group: true, count: 1};
+                seriesMap[groupKey] = {...m, is_group: true, count: 1, groupKey: groupKey};
+                seriesMap[groupKey].group_items = [m];
                 displayList.push(seriesMap[groupKey]);
             } else {
                 seriesMap[groupKey].count++;
+                seriesMap[groupKey].group_items.push(m);
             }
         } else {
             displayList.push(m);
@@ -1121,7 +1123,7 @@ window.renderLibrary = function() {
         const poster = m.cover_url || 'icon.png';
         const progressPct = m.watch_progress && m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
         
-        let clickAction = m.is_group ? `window.showEpisodeModal('${m.groupKey}')` : `playMedia(${m.id})`;
+        let clickAction = m.is_group ? `window.showEpisodeModal('${m.groupKey.replace(/'/g, "\\'")}')` : `playMedia(${m.id})`;
         
         return `
             <div class="lib-media-card" onclick="${clickAction}">

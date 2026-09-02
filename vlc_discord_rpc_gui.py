@@ -69,7 +69,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.7.7"
+CURRENT_VERSION = "5.7.9"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -3795,23 +3795,17 @@ class RPCBackend:
 
 
         if self.anilist_username_cache is not None:
-
-
-            # False means we already tried and failed — don't retry every poll
-
-
-            return self.anilist_username_cache if self.anilist_username_cache else None
-
-
+            # If it's a string, return it. If it's False, we already tried and failed recently.
+            if self.anilist_username_cache is not False:
+                return self.anilist_username_cache
+            # Retry after 60 seconds if it was False
+            if hasattr(self, '_anilist_username_last_try') and time.time() - self._anilist_username_last_try < 60:
+                return None
+                
         token = self.config.get("anilist_token", "").strip()
-
-
         if not token:
-
-
             self.anilist_username_cache = False
-
-
+            self._anilist_username_last_try = time.time()
             return None
 
 
@@ -3854,15 +3848,12 @@ class RPCBackend:
                     return name
 
 
-        except Exception:
-
-
+        except Exception as e:
+            self.log(f"[AniList] Identity API error: {e}")
             pass
 
-
         self.anilist_username_cache = False
-
-
+        self._anilist_username_last_try = time.time()
         return None
 
 
@@ -5532,11 +5523,7 @@ class RPCBackend:
 
 
                         if media_type == "music":
-
-
                             kwargs["activity_type"] = ActivityType.LISTENING
-
-
                             kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
 
 
@@ -5547,11 +5534,7 @@ class RPCBackend:
 
 
                         elif media_type == "movie":
-
-
                             kwargs["activity_type"] = ActivityType.WATCHING
-
-
                             kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
 
 
@@ -5628,12 +5611,10 @@ class RPCBackend:
 
 
                             # tv_show or anime
-
-
                             kwargs["activity_type"] = ActivityType.WATCHING
                             watch_mode = self.state_data.get("watch_mode", "NORMAL")
                             cleaned_title = self.state_data.get("cleaned_title", self.state_data["title"])
-                            kwargs["details"] = f"↻ Rewatching {cleaned_title}" if watch_mode == "REWATCH" else cleaned_title
+                            kwargs["details"] = f"🔄 Rewatching {cleaned_title}" if watch_mode == "REWATCH" else cleaned_title
 
 
 
