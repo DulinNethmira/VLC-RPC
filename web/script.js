@@ -934,9 +934,14 @@ function cloudLogout() {
 
 function loadCloudDevices() {
     window.pywebview.api.get_cloud_devices().then(res => {
+        const list = document.getElementById('cloud_devices_list');
+        list.innerHTML = "";
+        
         if (res.success && res.devices) {
-            const list = document.getElementById('cloud_devices_list');
-            list.innerHTML = "";
+            if (res.devices.length === 0) {
+                list.innerHTML = `<div style="padding: 10px; color: var(--text-secondary); text-align: center;">No devices connected.</div>`;
+                return;
+            }
             res.devices.forEach(dev => {
                 const devCard = document.createElement('div');
                 devCard.style = "display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 6px;";
@@ -952,6 +957,8 @@ function loadCloudDevices() {
                 `;
                 list.appendChild(devCard);
             });
+        } else {
+            list.innerHTML = `<div style="padding: 10px; color: #ef4444; text-align: center;">Failed to load devices: ${res.error || 'Unknown error'}</div>`;
         }
     });
 }
