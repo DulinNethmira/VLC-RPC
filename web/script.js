@@ -261,7 +261,9 @@ function saveConfig() {
         aniskip_auto_skip: document.getElementById('aniskip_auto_skip').checked,
         auto_score_popup: document.getElementById('auto_score_popup').checked,
         telemetry_enabled: document.getElementById('telemetry_enabled').checked,
-        theme_color: document.getElementById('theme_selector').value
+        theme_color: document.getElementById('theme_selector').value,
+        notification_mode: document.getElementById('notification_mode').value,
+        suppress_while_playing: document.getElementById('suppress_while_playing').checked
     };
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.save_config(config).then(function(response) {
@@ -407,8 +409,10 @@ function initPyWebview() {
         document.getElementById('aniskip_auto_skip').checked = !!config.aniskip_auto_skip;
         document.getElementById('auto_score_popup').checked = (config.auto_score_popup !== false);
         document.getElementById('telemetry_enabled').checked = (config.telemetry_enabled !== false);
+        document.getElementById('theme_selector').value = config.theme_color || '#5865F2';
+        document.getElementById('notification_mode').value = config.notification_mode || 'Enabled';
+        document.getElementById('suppress_while_playing').checked = (config.suppress_while_playing !== false);
         if (config.theme_color) {
-            document.getElementById('theme_selector').value = config.theme_color;
             applyTheme(config.theme_color);
         }
     });
@@ -1238,3 +1242,53 @@ document.addEventListener('pywebviewready', () => {
         window.scanLibrary();
     }, 1000);
 });
+
+window.showNotificationHistory = function() {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.get_notification_history().then(history => {
+            const list = document.getElementById('notification-modal-list');
+            list.innerHTML = '';
+            if (!history || history.length === 0) {
+                list.innerHTML = '<div style="color: rgba(255,255,255,0.5); text-align: center; padding: 20px;">No notifications recorded yet.</div>';
+            } else {
+                // Reversed to show newest first
+                history.reverse().forEach(notif => {
+                    let statusColor = 'rgba(255,255,255,0.6)';
+                    let statusIcon = 'fa-info-circle';
+                    let statusText = 'Unknown';
+                    // NotificationStatus enum: DISPLAYED=1, SUPPRESSED=2, MERGED=3, QUEUED=4
+                    if (notif.status === 1) { 
+                        statusColor = '#22c55e'; statusIcon = 'fa-check-circle'; statusText = 'Displayed';
+                    } else if (notif.status === 2) { 
+                        statusColor = '#ef4444'; statusIcon = 'fa-ban'; statusText = 'Suppressed';
+                    } else if (notif.status === 3) { 
+                        statusColor = '#3b82f6'; statusIcon = 'fa-compress-arrows-alt'; statusText = 'Merged';
+                    } else if (notif.status === 4) { 
+                        statusColor = '#f59e0b'; statusIcon = 'fa-clock'; statusText = 'Deferred';
+                    }
+
+                    const timeStr = new Date(notif.timestamp * 1000).toLocaleTimeString();
+                    const mergedText = notif.suppressed_count > 0 ? ` <span style="font-size: 0.75rem; background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 10px;">+${notif.suppressed_count} merged</span>` : '';
+
+                    const div = document.createElement('div');
+                    div.style.cssText = 'background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; display: flex; align-items: flex-start; gap: 12px;';
+                    div.innerHTML = `
+                        <div style="color: ${statusColor}; font-size: 1.2rem; margin-top: 2px;" title="${statusText}"><i class="fas ${statusIcon}"></i></div>
+                        <div style="flex-grow: 1;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                <strong style="font-size: 0.95rem;">${notif.title}</strong>
+                                <span style="font-size: 0.8rem; color: rgba(255,255,255,0.4);">${timeStr}</span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: rgba(255,255,255,0.7);">${notif.message}${mergedText}</div>
+                        </div>
+                    `;
+                    list.appendChild(div);
+                });
+            }
+            document.getElementById('notification-modal').style.display = 'flex';
+        }).catch(err => {
+            console.error(err);
+            alert("Failed to load history.");
+        });
+    }
+};

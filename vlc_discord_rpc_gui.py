@@ -7,6 +7,10 @@ import os
 import time
 import json
 import threading
+import uuid
+import ctypes
+import traceback
+from notification_manager import NotificationManager, NotificationPriority, NotificationStatus
 import queue
 import re
 import urllib.parse
@@ -69,7 +73,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.7.9"
+CURRENT_VERSION = "5.8.0"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -762,6 +766,7 @@ class RPCBackend:
         # their result if the counter has advanced by the time they finish.
         self.media_generation = 0
         self._media_gen_lock = threading.Lock()
+        self.notification_manager = NotificationManager()
         self.discord_manager = DiscordManager(self, self.config.get("client_id", "").strip() or DEFAULT_CLIENT_ID)
         self.discord_manager.start()
 
@@ -826,34 +831,34 @@ class RPCBackend:
                     return
                 time.sleep(1)
 
-    def log(self, msg, toast_title=None, toast_icon="info"):
-
-
+    def log(self, msg):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-
-
         formatted = f"[{timestamp}] {msg}"
-
-
         if self.window:
-
-
             try:
-
-
                 self.window.evaluate_js(f"if(window.addLog) window.addLog({json.dumps(formatted)});")
-
-
             except Exception:
-
-
                 pass
-
-
-        if toast_title:
-
-
-            show_toast(toast_title, msg, icon=toast_icon)
+                
+    def notify(self, type_id, title, message, priority=NotificationPriority.NORMAL, dedup_key=None, media=None, icon="info"):
+        is_playing = (self.state_data.get("playback_state") == "playing")
+        mode = self.config.get("notification_mode", "Enabled")
+        suppress = self.config.get("suppress_while_playing", True)
+        
+        self.notification_manager.send(
+            type_id=type_id,
+            title=title,
+            message=message,
+            priority=priority,
+            dedup_key=dedup_key or type_id,
+            media=media,
+            is_playing=is_playing,
+            notification_mode=mode,
+            suppress_while_playing=suppress,
+            show_toast_cb=show_toast,
+            log_cb=self.log,
+            icon=icon
+        )
 
 
 
@@ -1492,6 +1497,9 @@ class RPCBackend:
 
             status = (media_list or {}).get("status")
             if status == "REPEATING":
+                if self.state_data.get("watch_mode") != "REWATCH":
+                    repeat_num = (media_list or {}).get("repeat") or 1
+                    self.notify("rewatch", "Rewatch Detected", f"Rewatch #{repeat_num} detected", priority=NotificationPriority.NORMAL, icon="info")
                 self.state_data["watch_mode"] = "REWATCH"
                 self.state_data["rewatch_number"] = (media_list or {}).get("repeat") or 1
                 self.state_data["possible_rewatch"] = False
@@ -1847,6 +1855,7 @@ class RPCBackend:
                     "identity_version": ANILIST_IDENTITY_VERSION,
                 }
                 self.anilist_log("[AniList] Identity unresolved; sync skipped.")
+                self.notify("recognition_failure", "Unrecognized Media", f"Could not confidently identify '{title}'", priority=NotificationPriority.NORMAL, icon="error")
             elif len(scored) > 1 and scored[0][0] - scored[1][0] < 5:
                 identity = {
                     "source_key": identity_key,
@@ -1858,6 +1867,7 @@ class RPCBackend:
                     "identity_version": ANILIST_IDENTITY_VERSION,
                 }
                 self.anilist_log("[AniList] Identity ambiguous; AniList progress not modified.")
+                self.notify("recognition_failure", "Ambiguous Media", f"Multiple matches found for '{title}'", priority=NotificationPriority.NORMAL, icon="error")
             else:
                 score, reason, media = scored[0]
                 titles = media.get("title") or {}
@@ -2024,6 +2034,7 @@ class RPCBackend:
                 self.config["anilist_token"] = ""
                 save_config(self.config)
                 self.anilist_log("[Error] Token expired/invalid. Cleared - reconnect via Integrations.")
+                self.notify("sync_failure", "AniList Sync Failed", "Token expired. Please reconnect.", priority=NotificationPriority.HIGH, icon="error")
                 return False, "CURRENT"
             payload = response.json()
             entry = ((payload.get("data") or {}).get("SaveMediaListEntry") or {})
@@ -2031,6 +2042,7 @@ class RPCBackend:
                 errors = payload.get("errors") or []
                 reason = errors[0].get("message", "AniList mutation failed") if errors else "AniList mutation failed"
                 self.anilist_log(f"[Error] Mutation failed: {reason}")
+                self.notify("sync_failure", "AniList Sync Failed", f"{reason} - will retry later", priority=NotificationPriority.HIGH, icon="error")
                 return False, status
             identity["last_synced_episode"] = entry.get("progress")
             identity["last_synced_at"] = datetime.datetime.utcnow().isoformat() + "Z"
@@ -2740,22 +2752,12 @@ class RPCBackend:
                             requests.get(seek_url, auth=HTTPBasicAuth("", password), timeout=3)
 
 
-                            show_toast("AniSkip", f"Auto-skipped {label}! Jumped to {end_fmt}", icon="skip")
-
-
+                            self.notify("aniskip", "AniSkip", f"Auto-skipped {label}! Jumped to {end_fmt}", priority=NotificationPriority.NORMAL, icon="skip")
                             self.log(f"[AniSkip] Auto-skipped {label} at {current_time:.0f}s → {seg['end']:.0f}s")
-
-
                         except Exception as e:
-
-
                             self.log(f"[AniSkip] Auto-skip failed: {e}")
-
-
                     else:
-
-
-                        show_toast(f"AniSkip — {label} Detected", f"Ends at {end_fmt}", icon="skip")
+                        self.notify("aniskip_detect", f"AniSkip — {label} Detected", f"Ends at {end_fmt}", priority=NotificationPriority.NORMAL, icon="skip")
 
 
                         self.log(f"[AniSkip] {label} detected in '{title}' E{episode_num}")
@@ -2983,10 +2985,7 @@ class RPCBackend:
 
             if success:
 
-
-                show_toast("AniList Synced!", f"{title} • Episode {episode_num}", icon="sync")
-
-
+                # Success is logged silently by sync_anilist
                 # Check if this was the final episode or marked COMPLETED → show score popup
 
 
@@ -3000,8 +2999,7 @@ class RPCBackend:
 
 
                 if (new_status == "COMPLETED" or (total_eps and episode_num >= total_eps)) and media_id:
-
-
+                    self.notify("anime_completed", "Anime Completed", f"{title} completed!", priority=NotificationPriority.HIGH, icon="info")
                     threading.Thread(target=self.show_score_popup, args=(title, episode_num, media_id), daemon=True).start()
 
 
@@ -4609,14 +4607,12 @@ class RPCBackend:
 
 
                 if r.status_code == 200:
-
-
                     vlc_data = r.json()
-
+                    
+                    if not self.state_data.get("vlc_connected", False):
+                        self.notify("connection_recovery", "VLC Connected", "VLC connection restored.", priority=NotificationPriority.NORMAL, icon="info")
 
                     self.state_data["vlc_connected"] = True
-
-
                     playback_state = vlc_data.get("state", "stopped")
 
 
@@ -5226,9 +5222,14 @@ class RPCBackend:
 
 
 
+                        if getattr(self, 'last_watched_title', None) == cleaned_title:
+                            if not is_music and episode_str:
+                                self.notify("episode_change", "Episode Changed", f"{cleaned_title} — Episode {episode_str}", priority=NotificationPriority.NORMAL, icon="info")
+                        else:
+                            ep_suffix = f" — Episode {episode_str}" if episode_str and not is_music else ""
+                            self.notify("media_detection", "Media Detected", f"{cleaned_title}{ep_suffix}", priority=NotificationPriority.NORMAL, icon="info")
+
                         self.last_watched_title_raw = self.state_data['title']
-
-
                         self.last_watched_title = cleaned_title
 
 
@@ -5346,8 +5347,8 @@ class RPCBackend:
 
 
                             self.log("VLC stopped playback.")
-
-
+                            mode = self.config.get("notification_mode", "Enabled")
+                            self.notification_manager.flush_deferred(notification_mode=mode, show_toast_cb=show_toast)
                 else:
 
 
@@ -5393,7 +5394,7 @@ class RPCBackend:
                 if self.state_data.get("vlc_connected"):
 
 
-                    self.log("VLC connection lost.")
+                    self.notify("connection_lost", "VLC Disconnected", "VLC connection lost.", priority=NotificationPriority.NORMAL, icon="error")
 
 
                 # VLC is unreachable — mark disconnected and hibernate briefly
@@ -6900,7 +6901,7 @@ class LocalLibraryScanner(threading.Thread):
 
     def _scan_thread(self):
         try:
-            self.backend.log("Starting library scan...", toast_title="Library Scan", toast_icon="info")
+            self.backend.notify("library_scan", "Library Scan", "Starting library scan...", priority=NotificationPriority.LOW, icon="info")
             db_path = getattr(self.backend, 'db_path', None)
             if not db_path:
                 return
@@ -7025,6 +7026,10 @@ class LocalLibraryScanner(threading.Thread):
 class WebApi:
     def __init__(self, backend_instance):
         self._backend = backend_instance
+    def get_notification_history(self):
+        if hasattr(self._backend, 'notification_manager'):
+            return self._backend.notification_manager.get_history()
+        return []
     def get_state(self):
         return self._backend.state_data
     def get_config(self):
