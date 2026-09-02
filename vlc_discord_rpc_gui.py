@@ -69,7 +69,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.7.3"
+CURRENT_VERSION = "5.7.4"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -6950,11 +6950,12 @@ class LocalLibraryScanner(threading.Thread):
                                 c.execute("UPDATE local_media SET is_active=1, last_scanned=? WHERE id=?", (time.time(), media_id))
                                 continue
                                 
-                        parsed = RPCBackend._parse_response(file)
+                        parsed = clean_title(file)
                         title = parsed.get("title", "")
-                        episode_str = parsed.get("episode", "")
+                        ep_val = parsed.get("episode")
+                        episode_str = f"Episode {ep_val}" if ep_val else ""
                         season = parsed.get("season")
-                        is_music = parsed.get("is_music", False)
+                        is_music = is_music_file(file, None, None)
                         
                         anilist_id = None
                         cover_url = ""
