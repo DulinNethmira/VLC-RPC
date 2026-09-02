@@ -69,7 +69,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.7.6"
+CURRENT_VERSION = "5.7.7"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -79,7 +79,6 @@ ANILIST_IDENTITY_CONFIDENCE = 95
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "5.7.2"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 DEFAULT_CONFIG = {
     "client_id": DEFAULT_CLIENT_ID,
@@ -4657,7 +4656,8 @@ class RPCBackend:
                     file_name = meta.get("filename", "")
 
 
-                    input_uri = meta.get("url") or ""
+                    import urllib.parse
+                    input_uri = urllib.parse.unquote(meta.get("url") or "")
 
 
                     current_plid = str(vlc_data.get("currentplid", ""))  # changes on every playlist-item switch
@@ -6970,6 +6970,13 @@ class LocalLibraryScanner(threading.Thread):
                         if row:
                             media_id, old_size, old_mtime = row
                             if old_size == fsize and old_mtime == mtime:
+                                c.execute("SELECT cover_url, anilist_id FROM local_media WHERE id=?", (media_id,))
+                                res_cov = c.fetchone()
+                                if res_cov and res_cov[1] and not res_cov[0]:
+                                    fetched_cover = self.backend._fetch_anilist_cover(res_cov[1])
+                                    if fetched_cover:
+                                        c.execute("UPDATE local_media SET cover_url=? WHERE id=?", (fetched_cover, media_id))
+                                
                                 c.execute("UPDATE local_media SET is_active=1, last_scanned=? WHERE id=?", (time.time(), media_id))
                                 continue
                                 
@@ -7155,6 +7162,16 @@ class WebApi:
     def sync_discord_widget(self):
         threading.Thread(target=self._backend.force_sync_widget, daemon=True).start()
         threading.Thread(target=self._backend.force_sync_widget_v2, daemon=True).start()
+        return {"success": True}
+        
+    def force_clear_rpc(self):
+        self._backend.state_data["vlc_connected"] = False
+        self._backend.state_data["playback_state"] = "stopped"
+        if self._backend._discord_connected:
+            try:
+                self._backend.rpc.clear()
+            except Exception:
+                pass
         return {"success": True}
     def force_update(self):
         """Force Sync button: clears stuck cover, resets metadata, and re-triggers RPC update."""
@@ -7429,7 +7446,7 @@ class WebApi:
                     data = data["devices"]
                 return {"success": True, "devices": data}
             else:
-                return {"success": False, "error": "Failed to fetch devices"}
+                return {"success": True, "devices": []}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -7583,7 +7600,8 @@ class WebApi:
             
             return {"success": True, "status": res.status_code}
         except requests.exceptions.RequestException:
-            return {"success": False, "error": "VLC is not running or Web Interface is not enabled. Please open VLC first to play this file."}
+            os.startfile(abs_path)
+            return {"success": True, "status": "started_via_os"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

@@ -1024,6 +1024,16 @@ window.removeLibraryFolder = function(path) {
     }
 };
 
+window.forceClearRPC = function() {
+    if(window.pywebview && window.pywebview.api) {
+        window.pywebview.api.force_clear_rpc().then(data => {
+            if(data.success) {
+                window.fetchState();
+            }
+        });
+    }
+};
+
 window.scanLibrary = function() {
     const btn = document.getElementById('btn-scan-library');
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning...';
@@ -1103,18 +1113,22 @@ window.renderLibrary = function() {
         return;
     }
     
+    window.currentSeriesMap = seriesMap;
+    
     grid.innerHTML = displayList.map(m => {
         const title = m.title || m.filename;
         const sub = m.is_group ? `${m.count} Episodes` : (m.episode ? `Episode ${m.episode}` : (m.media_type === 'music' ? 'Music' : 'Video'));
         const poster = m.cover_url || 'icon.png';
         const progressPct = m.watch_progress && m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
         
+        let clickAction = m.is_group ? `window.showEpisodeModal('${m.groupKey}')` : `playMedia(${m.id})`;
+        
         return `
-            <div class="lib-media-card" onclick="playMedia(${m.id})">
+            <div class="lib-media-card" onclick="${clickAction}">
                 <div class="lib-media-poster-container">
                     <img src="${poster}" class="lib-media-poster" onerror="this.src='icon.png'">
                     <div class="lib-media-overlay">
-                        <i class="fas fa-play lib-media-play-icon"></i>
+                        <i class="fas fa-${m.is_group ? 'folder-open' : 'play'} lib-media-play-icon"></i>
                     </div>
                 </div>
                 ${progressPct > 0 ? `<div class="lib-progress-bg"><div class="lib-progress-fill" style="width: ${progressPct}%"></div></div>` : ''}
@@ -1125,6 +1139,31 @@ window.renderLibrary = function() {
             </div>
         `;
     }).join('');
+};
+
+window.showEpisodeModal = function(groupKey) {
+    let group = window.currentSeriesMap[groupKey];
+    if(!group) return;
+    
+    document.getElementById('episode-modal-title').innerText = group.title || 'Select Episode';
+    
+    let items = group.group_items.sort((a,b) => (a.episode || 0) - (b.episode || 0));
+    
+    let html = items.map(m => {
+        let epName = m.episode_title ? `Episode ${m.episode} - ${m.episode_title}` : (m.episode ? `Episode ${m.episode}` : m.filename);
+        let progressPct = m.watch_progress && m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
+        return `
+            <div onclick="playMedia(${m.id}); document.getElementById('episode-modal').style.display='none'" 
+                 style="padding: 12px; border-radius: 6px; cursor: pointer; transition: background 0.2s; margin-bottom: 4px; display: flex; flex-direction: column; background: rgba(255,255,255,0.05);"
+                 onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'">
+                <div style="font-weight: 500;">${epName}</div>
+                ${progressPct > 0 ? `<div style="height: 4px; background: rgba(255,255,255,0.1); width: 100%; border-radius: 2px; margin-top: 6px;"><div style="height: 100%; background: var(--accent-blurple); border-radius: 2px; width: ${progressPct}%"></div></div>` : ''}
+            </div>
+        `;
+    }).join('');
+    
+    document.getElementById('episode-modal-list').innerHTML = html;
+    document.getElementById('episode-modal').style.display = 'flex';
 };
 
 window.renderContinueWatching = function() {
