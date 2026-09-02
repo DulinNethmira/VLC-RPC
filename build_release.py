@@ -57,17 +57,28 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.7.5"
+    tag_name = "v5.7.6"
     
-    release_title = "✨ v5.7.5 - Final Library Hotfixes!"
-    release_notes = """### 🔧 Hotfix in v5.7.5
+    release_title = "✨ v5.7.6 - Premium UI & Smart Grouping!"
+    release_notes = """### 🚀 What's New in v5.7.6!
 
-We've squashed a couple of final bugs related to the new Local Media Library and Cloud Integrations:
+We've completely overhauled the Local Media Library UI to give you a true anime streaming experience!
 
-- **Library Scanner Fix**: Fixed an issue where scanning media without a validated cache would crash the scanner thread.
-- **Cloud Account Fix**: Fixed a bug where Connected Devices would fail to load properly after an app restart. 
+#### 🎨 Premium Anime Streaming UI
+- **Redesigned Cards**: The media cards now match the aesthetics of Netflix and Crunchyroll with edge-to-edge posters.
+- **Dynamic Interactions**: Added sleek hover-to-play overlays and micro-animations for better user engagement.
+- **Readable Titles**: Anime titles now wrap up to 2 lines instead of cutting off early!
 
-Enjoy the smooth experience! 🎉"""
+#### 🧠 Smart Season Grouping
+- Say goodbye to cluttered grids! The library scanner now utilizes a much smarter grouping algorithm. 
+- Episodes of the same season (e.g. *Re:ZERO Season 4*) will now correctly group into a single clean series card using AniList IDs.
+
+#### 🔧 Backend Enhancements
+- **Auto-Scan on Launch**: The library now automatically checks for new downloaded episodes in the background the moment you open the app!
+- **Poster Downloads**: Added a background worker that fetches official AniList covers for newly scanned anime if they are missing from your cache.
+- **Playback Error Fix**: Replaced the ugly HTTP timeout error with a friendly reminder if you attempt to play a file while VLC is closed.
+
+Enjoy the sleek new library experience! 🎉"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)

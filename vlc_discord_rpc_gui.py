@@ -69,7 +69,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.7.5"
+CURRENT_VERSION = "5.7.6"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -4147,6 +4147,29 @@ class RPCBackend:
             os.replace(tmp_path, self.gemini_cache_file)
         except Exception:
             pass
+    def _fetch_anilist_cover(self, anilist_id):
+        if not anilist_id:
+            return ""
+        if not hasattr(self, '_anilist_cover_cache'):
+            self._anilist_cover_cache = {}
+        if anilist_id in self._anilist_cover_cache:
+            return self._anilist_cover_cache[anilist_id]
+            
+        try:
+            query = '''query ($id: Int) { Media (id: $id) { coverImage { large } } }'''
+            response = requests.post(
+                'https://graphql.anilist.co',
+                json={'query': query, 'variables': {'id': anilist_id}},
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json().get('data', {}).get('Media', {})
+                cover = data.get('coverImage', {}).get('large', "")
+                self._anilist_cover_cache[anilist_id] = cover
+                return cover
+        except Exception:
+            pass
+        return ""
 
     def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist, input_uri="", media_type_hint="", generation=None):
         """Fetch metadata in a background thread so the main loop stays fast.
@@ -6973,6 +6996,9 @@ class LocalLibraryScanner(threading.Thread):
                                 # Try to get cover from metadata cache if we parsed the filename previously
                                 cached_meta = self.backend.metadata_cache.get(file, {})
                                 cover_url = cached_meta.get("large_image", "")
+                                
+                                if not cover_url:
+                                    cover_url = self.backend._fetch_anilist_cover(anilist_id)
                         
                         c.execute("""
                             INSERT INTO local_media (absolute_path, filename, extension, file_size, mtime, last_scanned, media_type, title, episode_title, season, episode, anilist_id, cover_url, is_active)
@@ -7556,6 +7582,8 @@ class WebApi:
             res = requests.get(url, auth=("", pwd), timeout=2)
             
             return {"success": True, "status": res.status_code}
+        except requests.exceptions.RequestException:
+            return {"success": False, "error": "VLC is not running or Web Interface is not enabled. Please open VLC first to play this file."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

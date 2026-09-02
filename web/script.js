@@ -1084,12 +1084,14 @@ window.renderLibrary = function() {
         if(currentLibFilter !== 'all' && m.media_type !== currentLibFilter) return;
         if(search && !(m.title || '').toLowerCase().includes(search) && !(m.filename || '').toLowerCase().includes(search)) return;
         
-        if(m.media_type === 'anime' && m.title) {
-            if(!seriesMap[m.title]) {
-                seriesMap[m.title] = {...m, is_group: true, count: 1};
-                displayList.push(seriesMap[m.title]);
+        let isAnime = m.media_type === 'anime' || (m.anilist_id != null);
+        if(isAnime && m.title) {
+            let groupKey = m.anilist_id ? `al_${m.anilist_id}` : `title_${m.title}`;
+            if(!seriesMap[groupKey]) {
+                seriesMap[groupKey] = {...m, is_group: true, count: 1};
+                displayList.push(seriesMap[groupKey]);
             } else {
-                seriesMap[m.title].count++;
+                seriesMap[groupKey].count++;
             }
         } else {
             displayList.push(m);
@@ -1109,10 +1111,15 @@ window.renderLibrary = function() {
         
         return `
             <div class="lib-media-card" onclick="playMedia(${m.id})">
-                <img src="${poster}" class="lib-media-poster" onerror="this.src='icon.png'">
+                <div class="lib-media-poster-container">
+                    <img src="${poster}" class="lib-media-poster" onerror="this.src='icon.png'">
+                    <div class="lib-media-overlay">
+                        <i class="fas fa-play lib-media-play-icon"></i>
+                    </div>
+                </div>
                 ${progressPct > 0 ? `<div class="lib-progress-bg"><div class="lib-progress-fill" style="width: ${progressPct}%"></div></div>` : ''}
                 <div class="lib-media-info">
-                    <div class="lib-media-title">${title}</div>
+                    <div class="lib-media-title" title="${title.replace(/"/g, '&quot;')}">${title}</div>
                     <div class="lib-media-sub">${sub}</div>
                 </div>
             </div>
@@ -1183,4 +1190,10 @@ document.addEventListener('pywebviewready', () => {
             }
         });
     });
+    
+    // Auto-scan library in background on startup
+    setTimeout(() => {
+        window.fetchLibraryMedia();
+        window.scanLibrary();
+    }, 1000);
 });
