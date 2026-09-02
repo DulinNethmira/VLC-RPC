@@ -73,7 +73,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.8.0"
+CURRENT_VERSION = "5.8.1"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -6139,10 +6139,7 @@ class RPCBackend:
                             self.discord_manager.submit_activity(self.media_generation, desired_client_id, kwargs)
                     except Exception:
                         pass
-            if getattr(self, "discord_manager", None):
-                _idle_secs = time.time() - getattr(self.discord_manager, "last_update_time", 0)
-                if _idle_secs > 60 and self.discord_manager.current_kwargs:
-                    self.discord_manager.clear_activity(self.media_generation)
+            # Idle clearing logic removed to fix startup Discord RPC bug
             update_interval = self.config.get("update_interval", 2)
 
 
