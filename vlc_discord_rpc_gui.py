@@ -69,7 +69,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.7.4"
+CURRENT_VERSION = "5.7.5"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -6970,11 +6970,9 @@ class LocalLibraryScanner(threading.Thread):
                                 anilist_id = cached.get("anilist_id")
                                 media_type = "anime"
                                 
-                                media_cache_key = f"media_{anilist_id}"
-                                with self.backend._anilist_media_list_lock:
-                                    media_info = self.backend.anilist_media_list_cache.get(media_cache_key)
-                                    if media_info and media_info.get("coverImage"):
-                                        cover_url = media_info["coverImage"].get("large", "")
+                                # Try to get cover from metadata cache if we parsed the filename previously
+                                cached_meta = self.backend.metadata_cache.get(file, {})
+                                cover_url = cached_meta.get("large_image", "")
                         
                         c.execute("""
                             INSERT INTO local_media (absolute_path, filename, extension, file_size, mtime, last_scanned, media_type, title, episode_title, season, episode, anilist_id, cover_url, is_active)
@@ -7400,7 +7398,10 @@ class WebApi:
                 "Authorization": f"Bearer {token}"
             }, timeout=15)
             if res.status_code == 200:
-                return {"success": True, "devices": res.json()}
+                data = res.json()
+                if isinstance(data, dict) and "devices" in data:
+                    data = data["devices"]
+                return {"success": True, "devices": data}
             else:
                 return {"success": False, "error": "Failed to fetch devices"}
         except Exception as e:

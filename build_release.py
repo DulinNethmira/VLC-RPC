@@ -57,16 +57,17 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.7.4"
+    tag_name = "v5.7.5"
     
-    release_title = "✨ v5.7.4 - Library Scanner Hotfix!"
-    release_notes = """### 🔧 Hotfix in v5.7.4
+    release_title = "✨ v5.7.5 - Final Library Hotfixes!"
+    release_notes = """### 🔧 Hotfix in v5.7.5
 
-We discovered a bug where the new Local Media Library scanner would fail to process files due to a parsing integration issue. 
+We've squashed a couple of final bugs related to the new Local Media Library and Cloud Integrations:
 
-This update fixes the scanner logic so it properly parses your files and identifies anime episodes seamlessly! 
+- **Library Scanner Fix**: Fixed an issue where scanning media without a validated cache would crash the scanner thread.
+- **Cloud Account Fix**: Fixed a bug where Connected Devices would fail to load properly after an app restart. 
 
-Enjoy the local media experience! 🎉"""
+Enjoy the smooth experience! 🎉"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)
