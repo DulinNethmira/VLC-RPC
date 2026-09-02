@@ -48,6 +48,9 @@
                 <a href="#" class="nav-item" data-tab="tab-anilogs">
                     <i class="fas fa-scroll"></i> AniList Logs
                 </a>
+                <a href="#" class="nav-item" data-tab="tab-account">
+                    <i class="fas fa-user-circle"></i> Account
+                </a>
                 <a href="#" class="nav-item" data-tab="tab-preferences">
                     <i class="fas fa-sliders-h"></i> Settings
                 </a>
@@ -179,7 +182,14 @@
             <div id="tab-analytics" class="tab-content">
                 <header class="page-header">
                     <h1><i class="fas fa-chart-bar" style="margin-right: 8px;"></i>Your Anime Wrap</h1>
-                    <div style="display: flex; gap: var(--space-sm);">
+                    <div style="display: flex; gap: var(--space-sm); align-items: center;">
+                        <select id="time-range-select" class="dropdown" onchange="loadAnalytics()" style="padding: 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); color: white; border: 1px solid rgba(255, 255, 255, 0.2);">
+                            <option value="today">Today</option>
+                            <option value="week">This Week</option>
+                            <option value="month">This Month</option>
+                            <option value="year">This Year</option>
+                            <option value="all" selected>All Time</option>
+                        </select>
                         <button class="action-btn" onclick="shareAnimeWrap()" style="background: linear-gradient(135deg,#6366f1,#8b5cf6); border: none; color: white;">
                             <i class="fas fa-camera"></i> Share Wrap
                         </button>
@@ -192,22 +202,22 @@
                 <div class="grid-3" style="margin-bottom: var(--space-xl);">
                     <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
                         <div style="font-size: 2.2rem; font-weight: 700; color: #a78bfa;" id="ana-total-hours">--</div>
-                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Total Hours Watched</div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Total Watch Time</div>
                     </div>
                     <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
-                        <div style="font-size: 2.2rem; font-weight: 700; color: #38bdf8;" id="ana-total-titles">--</div>
-                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Unique Titles</div>
+                        <div style="font-size: 2.2rem; font-weight: 700; color: #38bdf8;" id="ana-total-anime">--</div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Total Anime</div>
                     </div>
                     <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
-                        <div style="font-size: 2.2rem; font-weight: 700; color: #34d399;" id="ana-today-hours">--</div>
-                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Hours Today</div>
+                        <div style="font-size: 2.2rem; font-weight: 700; color: #34d399;" id="ana-unique-episodes">--</div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Unique Episodes</div>
                     </div>
                 </div>
                 
                 <div class="grid-2" style="margin-bottom: var(--space-xl);">
                     <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
-                        <div style="font-size: 2rem; font-weight: 700; color: #f472b6;" id="ana-avg-session">--</div>
-                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Avg Session (Mins)</div>
+                        <div style="font-size: 2rem; font-weight: 700; color: #f472b6;" id="ana-completed-episodes">--</div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Completed Episodes</div>
                     </div>
                     <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
                         <div style="font-size: 1.8rem; font-weight: 700; color: #fbbf24; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" id="ana-binge-day">--</div>
@@ -332,6 +342,57 @@
                 </div>
             </div>
 
+            <!-- Account Tab -->
+            <div id="tab-account" class="tab-content">
+                <header class="page-header">
+                    <h1>Cloud Account (Optional)</h1>
+                </header>
+
+                <div class="settings-grid">
+                    <div class="glass-card" id="account-logged-out">
+                        <h3><i class="fas fa-sign-in-alt"></i> Sign In / Register</h3>
+                        <p class="hint" style="margin-bottom: var(--space-md);">Link your VLC RPC installations across devices to track unified statistics.</p>
+                        
+                        <div class="input-group">
+                            <label>Email Address</label>
+                            <input type="email" id="cloud_email" placeholder="Email...">
+                        </div>
+                        <div class="input-group">
+                            <label>Password</label>
+                            <input type="password" id="cloud_password" placeholder="Password...">
+                        </div>
+                        <div style="display: flex; gap: var(--space-sm); margin-top: var(--space-md);">
+                            <button class="action-btn primary" style="flex: 1; justify-content: center;" onclick="cloudLogin()">
+                                <i class="fas fa-sign-in-alt"></i> Login
+                            </button>
+                            <button class="action-btn" style="flex: 1; justify-content: center;" onclick="cloudRegister()">
+                                <i class="fas fa-user-plus"></i> Register
+                            </button>
+                        </div>
+                        <p class="hint" style="margin-top: var(--space-md);">This is entirely optional. VLC RPC works fully offline.</p>
+                    </div>
+
+                    <div class="glass-card" id="account-logged-in" style="display: none;">
+                        <h3><i class="fas fa-user-check"></i> Connected Account</h3>
+                        <div style="margin: var(--space-md) 0; padding: var(--space-md); background: rgba(0,0,0,0.2); border-radius: var(--radius-sm);">
+                            <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 4px;">Logged in as:</div>
+                            <div id="cloud_current_email" style="font-weight: 700; font-size: 1.1rem; color: var(--accent-blurple);">--</div>
+                        </div>
+                        
+                        <div id="cloud_devices_section" style="margin-top: var(--space-lg);">
+                            <h4 style="margin-bottom: var(--space-sm);"><i class="fas fa-laptop"></i> Connected Devices</h4>
+                            <div id="cloud_devices_list" style="display: flex; flex-direction: column; gap: var(--space-sm); max-height: 200px; overflow-y: auto;">
+                                <!-- Devices will be populated here -->
+                            </div>
+                        </div>
+
+                        <button class="action-btn" style="width: 100%; justify-content: center; border-color: #ef4444; color: #ef4444; margin-top: var(--space-xl);" onclick="cloudLogout()">
+                            <i class="fas fa-sign-out-alt"></i> Log Out
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Settings (Preferences) Tab -->
             <div id="tab-preferences" class="tab-content">
                 <header class="page-header">
@@ -407,6 +468,23 @@
                             </select>
                             <span class="hint">Uploads a frame from the video every 5 minutes for Discord cover art.</span>
                         </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3><i class="fas fa-chart-line"></i> Usage Statistics (Cloud)</h3>
+                        <div class="input-group">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="telemetry_enabled" checked>
+                                <span>Enable Anonymous Telemetry</span>
+                            </label>
+                        </div>
+                        <p class="hint" style="margin-top: var(--space-md); margin-bottom: var(--space-xs);">
+                            <strong>What is collected:</strong> Pseudonymous/random installation ID, VLC RPC Version, Platform.<br>
+                            <strong>What is NEVER collected:</strong> Anime/video names, Watch History, AniList info, Discord messages, Local files, Passwords, Hardware Identifiers.<br>
+                        </p>
+                        <p class="hint">
+                            Aggregate metrics contain no direct user identifiers and are designed to minimize personal data.
+                        </p>
                     </div>
                 </div>
             </div>

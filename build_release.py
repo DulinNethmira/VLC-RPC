@@ -57,19 +57,25 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.6.6"
+    tag_name = "v5.7.2"
     
-    release_title = "✨ v5.6.6 - Hotfix: Discord RPC Media Recognition"
-    release_notes = """### 🚀 What's New in v5.6.6!
+    release_title = "✨ v5.7.2 - UI Polish & Analytics Hotfix!"
+    release_notes = """### 🚀 What's New in v5.7.2!
 
-#### 🚑 Critical Hotfix
-- **Media Recognition Fixed**: Fixed a critical bug in `v5.6.5` where the new asynchronous Discord pipeline accidentally dropped the metadata parsing block, causing the tool to think nothing was playing. The logic has been properly restored and media recognition is now working perfectly again alongside the new anti-freeze asynchronous system!
+We've polished up the UI and fixed some critical bugs to keep your Anime Wrap looking beautiful!
 
-#### ⚡ Asynchronous Discord RPC (from v5.6.5)
-- **Completely Decoupled**: The Discord IPC updates have been moved entirely to a dedicated background thread (`DiscordManager`). 
-- **Instant Responsiveness**: Previously, if Discord was busy or dropped packets, pausing/resuming media in VLC would freeze the entire tracking tool for 1-2 minutes. Now, the main event loop never blocks, ensuring your playback state and UI updates instantly while Discord catches up seamlessly in the background!
+#### 📊 Analytics Wrap Fixes
+- Fixed a bug where **Total Anime**, **Unique Episodes**, and **Completed Episodes** weren't calculating or showing up properly. Your stats are now fully functional and perfectly accurate!
+- Fixed a UI issue where the Time Range dropdown menu had unreadable white text on a white background. It's now fully visible and fits the dark mode theme!
 
-Enjoy the hotfix! 🎉"""
+#### 🍎 UI Enhancements
+- Fixed the Cloud Account Email input field formatting to perfectly match the Password field (say goodbye to weird lengths!).
+- Fixed an overflow issue on the VLC Connection port input field. It now neatly stays inside its container!
+
+### 🔧 Under The Hood
+- Squashed backend formatting bugs.
+
+Enjoy the polish! 🎉"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)

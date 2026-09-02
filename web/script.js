@@ -260,6 +260,7 @@ function saveConfig() {
         scene_snapshots: document.getElementById('scene_snapshots').value === 'true',
         aniskip_auto_skip: document.getElementById('aniskip_auto_skip').checked,
         auto_score_popup: document.getElementById('auto_score_popup').checked,
+        telemetry_enabled: document.getElementById('telemetry_enabled').checked,
         theme_color: document.getElementById('theme_selector').value
     };
     if (window.pywebview && window.pywebview.api) {
@@ -405,6 +406,7 @@ function initPyWebview() {
         document.getElementById('scene_snapshots').value = (config.scene_snapshots !== false) ? 'true' : 'false';
         document.getElementById('aniskip_auto_skip').checked = !!config.aniskip_auto_skip;
         document.getElementById('auto_score_popup').checked = (config.auto_score_popup !== false);
+        document.getElementById('telemetry_enabled').checked = (config.telemetry_enabled !== false);
         if (config.theme_color) {
             document.getElementById('theme_selector').value = config.theme_color;
             applyTheme(config.theme_color);
@@ -415,6 +417,18 @@ function initPyWebview() {
         e.preventDefault();
         window.pywebview.api.auth_anilist();
     });
+
+    // Check Cloud Account Status
+    window.pywebview.api.get_cloud_account().then(res => {
+        if (res.logged_in) {
+            document.getElementById('account-logged-out').style.display = 'none';
+            document.getElementById('account-logged-in').style.display = 'block';
+            document.getElementById('cloud_current_email').textContent = res.email;
+            loadCloudDevices();
+        }
+    });
+
+
 
     // Start polling state from backend safely
     setInterval(() => {
@@ -761,20 +775,27 @@ let _anaWeeklyChart = null;
 
 function loadAnalytics() {
     if (!window.pywebview || !window.pywebview.api) return;
-    window.pywebview.api.get_stats().then(stats => {
+    const timeRange = document.getElementById('time-range-select') ? document.getElementById('time-range-select').value : 'all';
+    
+    window.pywebview.api.get_stats(timeRange).then(stats => {
         if (!stats) return;
 
         // ── Summary Cards ──────────────────────────────────────────────
         const totalSec = stats.total_watch_time || 0;
-        document.getElementById('ana-total-hours').textContent = (totalSec / 3600).toFixed(1);
+        const totalHoursEl = document.getElementById('ana-total-hours');
+        if (totalHoursEl) totalHoursEl.textContent = (totalSec / 3600).toFixed(1);
 
-        const titles = new Set((stats.history || []).map(h => h.title));
-        document.getElementById('ana-total-titles').textContent = titles.size;
+        const totalAnimeEl = document.getElementById('ana-total-anime');
+        if (totalAnimeEl) totalAnimeEl.textContent = stats.total_anime || 0;
 
-        const todayStr = new Date().toISOString().slice(0, 10);
-        const todaySec = (stats.history || []).filter(h => h.timestamp && h.timestamp.startsWith(todayStr))
-            .reduce((acc, h) => acc + (h.duration || 0), 0);
-        document.getElementById('ana-today-hours').textContent = (todaySec / 3600).toFixed(1);
+        const uniqueEpsEl = document.getElementById('ana-unique-episodes');
+        if (uniqueEpsEl) uniqueEpsEl.textContent = stats.unique_episodes || 0;
+        
+        const compEpsEl = document.getElementById('ana-completed-episodes');
+        if (compEpsEl) compEpsEl.textContent = stats.completed_episodes || 0;
+        
+        const bingeDayEl = document.getElementById('ana-binge-day');
+        if (bingeDayEl) bingeDayEl.textContent = stats.binge_day || "--";
 
         // ── 7-Day Chart ──────────────────────────────────────────────────
         const labels = [];
@@ -870,3 +891,78 @@ window.shareAnimeWrap = function() {
         link.click();
     });
 };
+
+function cloudLogin() {
+    const email = document.getElementById('cloud_email').value;
+    const password = document.getElementById('cloud_password').value;
+    if (!email || !password) return alert("Please enter email and password");
+    
+    window.pywebview.api.auth_cloud_login(email, password).then(res => {
+        if (res.success) {
+            document.getElementById('account-logged-out').style.display = 'none';
+            document.getElementById('account-logged-in').style.display = 'block';
+            document.getElementById('cloud_current_email').textContent = res.email;
+            loadCloudDevices();
+        } else {
+            alert("Login Failed: " + res.error);
+        }
+    });
+}
+
+function cloudRegister() {
+    const email = document.getElementById('cloud_email').value;
+    const password = document.getElementById('cloud_password').value;
+    if (!email || !password) return alert("Please enter email and password");
+    
+    window.pywebview.api.auth_cloud_register(email, password).then(res => {
+        if (res.success) {
+            alert("Registration successful! You can now log in.");
+        } else {
+            alert("Registration Failed: " + res.error);
+        }
+    });
+}
+
+function cloudLogout() {
+    window.pywebview.api.auth_cloud_logout().then(() => {
+        document.getElementById('account-logged-out').style.display = 'block';
+        document.getElementById('account-logged-in').style.display = 'none';
+        document.getElementById('cloud_email').value = "";
+        document.getElementById('cloud_password').value = "";
+    });
+}
+
+function loadCloudDevices() {
+    window.pywebview.api.get_cloud_devices().then(res => {
+        if (res.success && res.devices) {
+            const list = document.getElementById('cloud_devices_list');
+            list.innerHTML = "";
+            res.devices.forEach(dev => {
+                const devCard = document.createElement('div');
+                devCard.style = "display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 6px;";
+                devCard.innerHTML = `
+                    <div>
+                        <div style="font-weight: bold;">${dev.platform || 'Unknown'} (v${dev.app_version || '?'})</div>
+                        <div style="font-size: 0.8em; color: var(--text-secondary);">Last seen: ${new Date(dev.last_seen).toLocaleString()}</div>
+                        <div style="font-size: 0.7em; color: var(--text-secondary); opacity: 0.7;">ID: ${dev.id}</div>
+                    </div>
+                    <button class="action-btn" style="padding: 6px 12px; background: rgba(239, 68, 68, 0.2); color: #ef4444; border: none;" onclick="revokeCloudDevice('${dev.id}')">
+                        Revoke
+                    </button>
+                `;
+                list.appendChild(devCard);
+            });
+        }
+    });
+}
+
+function revokeCloudDevice(id) {
+    if (!confirm("Are you sure you want to revoke this device? It will be logged out and its future data won't be linked to your account.")) return;
+    window.pywebview.api.revoke_cloud_device(id).then(res => {
+        if (res.success) {
+            loadCloudDevices();
+        } else {
+            alert("Revocation failed: " + res.error);
+        }
+    });
+}
