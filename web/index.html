@@ -57,6 +57,9 @@
                 <a href="#" class="nav-item" data-tab="tab-preferences">
                     <i class="fas fa-sliders-h"></i> Settings
                 </a>
+                <a href="#" class="nav-item" data-tab="tab-diagnostics">
+                    <i class="fas fa-stethoscope"></i> Diagnostics Center
+                </a>
             </div>
             
             <div class="sidebar-footer">
@@ -562,6 +565,43 @@
                             Aggregate metrics contain no direct user identifiers and are designed to minimize personal data.
                         </p>
                     </div>
+                </div>
+            </div>
+
+            <!-- Diagnostics Tab -->
+            <div id="tab-diagnostics" class="tab-content">
+                <header class="page-header">
+                    <h1>Diagnostics Center</h1>
+                    <div style="display: flex; gap: var(--space-sm);">
+                        <button class="action-btn" id="btn-run-diagnostics" onclick="runDiagnostics()">
+                            <i class="fas fa-stethoscope"></i> Run Diagnostics
+                        </button>
+                        <button class="action-btn primary" id="btn-export-diagnostics" onclick="exportDiagnostics()">
+                            <i class="fas fa-download"></i> Export Diagnostics
+                        </button>
+                    </div>
+                </header>
+                
+                <div class="diagnostics-grid" id="diagnostics-components-grid">
+                    <!-- Components populated by JS -->
+                </div>
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-xl); margin-top: var(--space-xl);">
+                    <!-- Timeline Section -->
+                    <section>
+                        <h2 style="font-size: 1.1rem; margin-bottom: var(--space-md); border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px;">Event Timeline</h2>
+                        <div class="diagnostics-timeline" id="diagnostics-timeline" style="max-height: 400px; overflow-y: auto;">
+                            <!-- Timeline events populated by JS -->
+                        </div>
+                    </section>
+                    
+                    <!-- Errors Section -->
+                    <section>
+                        <h2 style="font-size: 1.1rem; margin-bottom: var(--space-md); border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; color: #ff5c5c;">Recent Errors</h2>
+                        <div class="diagnostics-errors" id="diagnostics-errors" style="max-height: 400px; overflow-y: auto;">
+                            <!-- Error items populated by JS -->
+                        </div>
+                    </section>
                 </div>
             </div>
 
