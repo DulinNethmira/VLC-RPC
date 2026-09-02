@@ -28,7 +28,11 @@ from pypresence import Presence, ActivityType
 import webview
 import pystray
 from PIL import Image
-from PIL import Image
+try:
+    import keyring
+except ImportError:
+    keyring = None
+import uuid as _uuid
 class NotifierClient:
     def __init__(self):
         self.proc = None
@@ -72,7 +76,7 @@ ANILIST_IDENTITY_CONFIDENCE = 95
 HISTORY_FILE = "history.json"
 COVERS_DIR = "covers_cache"
 DEFAULT_CLIENT_ID = "1465711556418474148"
-CURRENT_VERSION = "5.6.6"
+CURRENT_VERSION = "5.7.2"
 GITHUB_REPO = "DulinNethmira/VLC-RPC"
 DEFAULT_CONFIG = {
     "client_id": DEFAULT_CLIENT_ID,
@@ -93,7 +97,9 @@ DEFAULT_CONFIG = {
     "discord_widget_app_id": "",
     "discord_widget_user_id": "",
     "aniskip_auto_skip": False,
-    "auto_score_popup": True
+    "auto_score_popup": True,
+    "telemetry_enabled": True,
+    "cloud_api_url": "https://vlc-rpc-cloud.onrender.com"
 }
 def query_gemini_title(filename, api_key):
     """Use Gemini REST API to get the exact official anime/media title and episode."""
@@ -772,9 +778,51 @@ class RPCBackend:
 
         threading.Thread(target=self.force_sync_widget_v2, daemon=True).start()
 
+        # Start anonymous telemetry worker (non-blocking, fully optional)
+        threading.Thread(target=self._telemetry_worker, daemon=True).start()
 
 
 
+
+    def _get_installation_id(self):
+        """Get or create a persistent installation UUID from config."""
+        iid = self.config.get("installation_id")
+        if not iid:
+            iid = str(_uuid.uuid4())
+            self.config["installation_id"] = iid
+            save_config(self.config)
+        return iid
+
+    def _telemetry_worker(self):
+        """Background daemon: registers this installation and sends periodic heartbeats."""
+        if not self.config.get("telemetry_enabled", True):
+            return
+        cloud_url = self.config.get("cloud_api_url", "https://vlc-rpc-cloud.onrender.com").rstrip("/")
+        install_id = self._get_installation_id()
+        import platform as _platform
+        # Register
+        try:
+            requests.post(f"{cloud_url}/api/telemetry/register", json={
+                "installation_id": install_id,
+                "app_version": CURRENT_VERSION,
+                "platform": _platform.system()
+            }, timeout=10)
+        except Exception:
+            pass
+        # Heartbeat loop
+        while not self.state_data.get("exit_flag"):
+            try:
+                if self.config.get("telemetry_enabled", True):
+                    requests.post(f"{cloud_url}/api/telemetry/heartbeat", json={
+                        "installation_id": install_id
+                    }, timeout=10)
+            except Exception:
+                pass
+            # Sleep 60s in small increments so we can exit cleanly
+            for _ in range(60):
+                if self.state_data.get("exit_flag"):
+                    return
+                time.sleep(1)
 
     def log(self, msg, toast_title=None, toast_icon="info"):
 
@@ -6844,9 +6892,12 @@ class WebApi:
     def manual_start_rewatch(self):
         queued = self._backend.start_anilist_rewatch()
         return {"success": queued, "error": "Rewatch start is already in progress." if not queued else ""}
-    def get_stats(self):
+    def get_stats(self, time_range="all"):
         stats = {
             "total_watch_time": 0,
+            "total_anime": 0,
+            "unique_episodes": 0,
+            "completed_episodes": 0,
             "media_types": {"anime": 0, "movie": 0, "tv_show": 0, "music": 0},
             "recent_activity": [0] * 7,
             "history": [],
@@ -6860,19 +6911,43 @@ class WebApi:
                 return stats
             conn = sqlite3.connect(db_path)
             c = conn.cursor()
+            
+            where_clause = ""
+            if time_range == "today":
+                where_clause = "WHERE timestamp >= date('now', 'localtime')"
+            elif time_range == "week":
+                where_clause = "WHERE timestamp >= date('now', 'localtime', '-7 days')"
+            elif time_range == "month":
+                where_clause = "WHERE timestamp >= date('now', 'localtime', 'start of month')"
+            elif time_range == "year":
+                where_clause = "WHERE timestamp >= date('now', 'localtime', 'start of year')"
+                
             # Total watch time
-            c.execute("SELECT SUM(watch_duration) FROM history")
+            c.execute(f"SELECT SUM(watch_duration) FROM history {where_clause}")
             row = c.fetchone()
             stats["total_watch_time"] = int(row[0] or 0)
+            
+            # Total anime (unique titles)
+            c.execute(f"SELECT COUNT(DISTINCT title) FROM history {where_clause}")
+            stats["total_anime"] = int(c.fetchone()[0] or 0)
+            
+            # Unique episodes
+            c.execute(f"SELECT COUNT(DISTINCT title || episode_str) FROM history {where_clause}")
+            stats["unique_episodes"] = int(c.fetchone()[0] or 0)
+            
+            # Completed episodes (duration > 15 mins = 900s)
+            c.execute(f"SELECT COUNT(*) FROM history {where_clause} {'AND' if where_clause else 'WHERE'} watch_duration >= 900")
+            stats["completed_episodes"] = int(c.fetchone()[0] or 0)
+
             # Media type breakdown using is_music flag
-            c.execute("SELECT is_music, SUM(watch_duration) FROM history GROUP BY is_music")
+            c.execute(f"SELECT is_music, SUM(watch_duration) FROM history {where_clause} GROUP BY is_music")
             for is_music, dur in c.fetchall():
                 dur = int(dur or 0)
                 if is_music:
                     stats["media_types"]["music"] += dur
                 else:
                     stats["media_types"]["anime"] += dur  # default non-music to anime bucket
-            # 7-day activity (minutes)
+            # 7-day activity (hours per day) - Always 7 days regardless of time_range
             now = datetime.datetime.now()
             for i in range(7):
                 day = now - datetime.timedelta(days=6 - i)
@@ -6881,18 +6956,18 @@ class WebApi:
                 r = c.fetchone()
                 stats["recent_activity"][i] = round((r[0] or 0) / 3600, 1)
             # Average session length (minutes)
-            c.execute("SELECT COUNT(*) FROM history WHERE watch_duration > 0")
+            c.execute(f"SELECT COUNT(*) FROM history {where_clause} {'AND' if where_clause else 'WHERE'} watch_duration > 0")
             total_sessions = c.fetchone()[0] or 1
             if total_sessions > 0 and stats["total_watch_time"] > 0:
                 stats["avg_session_minutes"] = round((stats["total_watch_time"] / total_sessions) / 60, 1)
             # Most Binge-Watched Day
-            c.execute("SELECT substr(timestamp, 1, 10) as day, SUM(watch_duration) as dur FROM history GROUP BY day ORDER BY dur DESC LIMIT 1")
+            c.execute(f"SELECT substr(timestamp, 1, 10) as day, SUM(watch_duration) as dur FROM history {where_clause} GROUP BY day ORDER BY dur DESC LIMIT 1")
             binge_res = c.fetchone()
             if binge_res and binge_res[1]:
                 stats["binge_day"] = binge_res[0]
                 stats["binge_hours"] = round(binge_res[1] / 3600, 1)
             # Recent history list (last 50 entries)
-            c.execute("SELECT title, episode_str, is_music, watch_duration, timestamp FROM history ORDER BY id DESC LIMIT 50")
+            c.execute(f"SELECT title, episode_str, is_music, watch_duration, timestamp FROM history {where_clause} ORDER BY id DESC LIMIT 50")
             for row in c.fetchall():
                 stats["history"].append({
                     "title": row[0],
@@ -7093,6 +7168,124 @@ class WebApi:
             return {"success": True, "history": history_list, "total_time": total_time}
         except Exception as e:
             return {"success": False, "error": str(e)}
+    # ── Cloud Account API Methods ──────────────────────────────────────────
+    def _cloud_url(self):
+        return self._backend.config.get("cloud_api_url", "https://vlc-rpc-cloud.onrender.com").rstrip("/")
+
+    def _keyring_get(self, key):
+        if keyring:
+            try:
+                return keyring.get_password("vlc-rpc-cloud", key)
+            except Exception:
+                pass
+        return None
+
+    def _keyring_set(self, key, value):
+        if keyring:
+            try:
+                keyring.set_password("vlc-rpc-cloud", key, value)
+            except Exception:
+                pass
+
+    def _keyring_delete(self, key):
+        if keyring:
+            try:
+                keyring.delete_password("vlc-rpc-cloud", key)
+            except Exception:
+                pass
+
+    def get_cloud_account(self):
+        """Check if the user is logged into a cloud account."""
+        token = self._keyring_get("access_token")
+        email = self._keyring_get("email")
+        if token and email:
+            return {"logged_in": True, "email": email}
+        return {"logged_in": False}
+
+    def auth_cloud_login(self, email, password):
+        """Login to cloud account."""
+        try:
+            install_id = self._backend._get_installation_id()
+            res = requests.post(f"{self._cloud_url()}/api/auth/login", json={
+                "email": email,
+                "password": password,
+                "installation_id": install_id
+            }, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+                self._keyring_set("access_token", data["access_token"])
+                self._keyring_set("refresh_token", data["refresh_token"])
+                self._keyring_set("email", email)
+                return {"success": True, "email": email}
+            else:
+                detail = res.json().get("detail", "Login failed")
+                return {"success": False, "error": detail}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def auth_cloud_register(self, email, password):
+        """Register a new cloud account."""
+        try:
+            res = requests.post(f"{self._cloud_url()}/api/auth/register", json={
+                "email": email,
+                "password": password
+            }, timeout=15)
+            if res.status_code == 200:
+                return {"success": True}
+            else:
+                detail = res.json().get("detail", "Registration failed")
+                return {"success": False, "error": detail}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def auth_cloud_logout(self):
+        """Logout from cloud account."""
+        try:
+            token = self._keyring_get("refresh_token")
+            if token:
+                access = self._keyring_get("access_token")
+                requests.post(f"{self._cloud_url()}/api/auth/logout", json={
+                    "refresh_token": token
+                }, headers={"Authorization": f"Bearer {access}"} if access else {}, timeout=10)
+        except Exception:
+            pass
+        self._keyring_delete("access_token")
+        self._keyring_delete("refresh_token")
+        self._keyring_delete("email")
+        return {"success": True}
+
+    def get_cloud_devices(self):
+        """Get list of devices linked to the user's cloud account."""
+        try:
+            token = self._keyring_get("access_token")
+            if not token:
+                return {"success": False, "error": "Not logged in"}
+            res = requests.get(f"{self._cloud_url()}/api/auth/devices", headers={
+                "Authorization": f"Bearer {token}"
+            }, timeout=15)
+            if res.status_code == 200:
+                return {"success": True, "devices": res.json()}
+            else:
+                return {"success": False, "error": "Failed to fetch devices"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def revoke_cloud_device(self, installation_id):
+        """Revoke/unlink a device from the user's cloud account."""
+        try:
+            token = self._keyring_get("access_token")
+            if not token:
+                return {"success": False, "error": "Not logged in"}
+            res = requests.delete(f"{self._cloud_url()}/api/auth/devices/{installation_id}", headers={
+                "Authorization": f"Bearer {token}"
+            }, timeout=15)
+            if res.status_code == 200:
+                return {"success": True}
+            else:
+                return {"success": False, "error": "Revocation failed"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
 # Instantiated inside __main__ to avoid blocking on import/frozen startup
 backend = None
 api = None
