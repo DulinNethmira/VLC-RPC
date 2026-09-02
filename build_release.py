@@ -57,26 +57,16 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.7.3"
+    tag_name = "v5.7.4"
     
-    release_title = "✨ v5.7.3 - Local Media Library Unleashed!"
-    release_notes = """### 🚀 What's New in v5.7.3!
+    release_title = "✨ v5.7.4 - Library Scanner Hotfix!"
+    release_notes = """### 🔧 Hotfix in v5.7.4
 
-We are incredibly excited to introduce the **Local Media Library** — a completely seamless way to browse, organize, and play your local files right from VLC RPC!
+We discovered a bug where the new Local Media Library scanner would fail to process files due to a parsing integration issue. 
 
-#### 📁 Fully Offline Media Library
-- **Add Your Folders**: Point the app to your Anime, Movies, TV Shows, and Music folders.
-- **Smart Background Scanner**: Automatically detects changes, new files, and missing files without slowing you down!
-- **Zero-Latency UI**: Instantly filter and search your entire collection, completely offline!
+This update fixes the scanner logic so it properly parses your files and identifies anime episodes seamlessly! 
 
-#### ⏭️ Smart Continue Watching
-- **Identity-based Progress Mapping**: Unfinished episodes dynamically populate your *Continue Watching* rail.
-- **Flawless Resume**: Powered by our unified progress tracking!
-
-#### 🍎 Seamless Playback
-- One-click play! Launch any file directly into your active VLC player with perfect Unicode path handling!
-
-Enjoy the new local experience! 🎉"""
+Enjoy the local media experience! 🎉"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)
