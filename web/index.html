@@ -36,6 +36,9 @@
                 <a href="#" class="nav-item active" data-tab="tab-dashboard">
                     <i class="fas fa-layer-group"></i> Dashboard
                 </a>
+                <a href="#" class="nav-item" data-tab="tab-library">
+                    <i class="fas fa-folder-open"></i> Local Library
+                </a>
                 <a href="#" class="nav-item" data-tab="tab-history">
                     <i class="fas fa-chart-pie"></i> Stats & History
                 </a>
@@ -141,6 +144,51 @@
                                 <div class="time" id="dc-time"></div>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Local Library Tab -->
+            <div id="tab-library" class="tab-content">
+                <header class="page-header">
+                    <h1><i class="fas fa-folder-open" style="margin-right: 8px;"></i>Local Library</h1>
+                    <div style="display: flex; gap: var(--space-sm); align-items: center;">
+                        <input type="text" id="library-search" placeholder="Search media..." oninput="filterLibrary()" style="padding: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); color: white; border: 1px solid rgba(255, 255, 255, 0.2); width: 200px;">
+                        <button class="action-btn" onclick="openLibraryFolders()">
+                            <i class="fas fa-cog"></i> Folders
+                        </button>
+                        <button class="action-btn" onclick="scanLibrary()" id="btn-scan-library">
+                            <i class="fas fa-sync"></i> Scan
+                        </button>
+                    </div>
+                </header>
+
+                <div class="glass-card" style="margin-bottom: var(--space-xl); display: none;" id="library-folders-container">
+                    <h3>Library Folders</h3>
+                    <div style="display: flex; gap: var(--space-sm); margin-top: var(--space-sm);">
+                        <input type="text" id="new-folder-path" placeholder="C:\Users\PC\Videos\Anime" style="flex: 1; padding: 8px; border-radius: 4px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white;">
+                        <button class="action-btn" onclick="addLibraryFolder()"><i class="fas fa-plus"></i> Add</button>
+                    </div>
+                    <ul id="folders-list" style="list-style: none; padding: 0; margin-top: var(--space-md); display: flex; flex-direction: column; gap: 8px;">
+                    </ul>
+                </div>
+
+                <div class="glass-card" style="margin-bottom: var(--space-xl); overflow-x: auto;" id="continue-watching-container">
+                    <h3>Continue Watching</h3>
+                    <div id="continue-watching-rail" style="display: flex; gap: var(--space-md); margin-top: var(--space-md); padding-bottom: 8px;">
+                        <p class="empty-state">No active shows.</p>
+                    </div>
+                </div>
+
+                <div class="glass-card">
+                    <div style="display: flex; gap: var(--space-sm); margin-bottom: var(--space-md); flex-wrap: wrap;">
+                        <button class="lib-filter-btn active" data-filter="all" onclick="setLibraryFilter('all')" style="padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer;">All</button>
+                        <button class="lib-filter-btn" data-filter="anime" onclick="setLibraryFilter('anime')" style="padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer;">Anime</button>
+                        <button class="lib-filter-btn" data-filter="movie" onclick="setLibraryFilter('movie')" style="padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer;">Movies</button>
+                        <button class="lib-filter-btn" data-filter="tv" onclick="setLibraryFilter('tv')" style="padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer;">TV</button>
+                    </div>
+                    <div id="library-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-md);">
+                        <p class="empty-state">Loading library...</p>
                     </div>
                 </div>
             </div>

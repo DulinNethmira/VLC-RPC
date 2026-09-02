@@ -67,7 +67,10 @@ class NotifierClient:
 _notifier_client = NotifierClient()
 def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
+# Global Config
 CONFIG_FILE = "config.json"
+CURRENT_VERSION = "5.7.3"
+UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
 ANILIST_IDENTITY_VERSION = 1
@@ -781,7 +784,7 @@ class RPCBackend:
         # Start anonymous telemetry worker (non-blocking, fully optional)
         threading.Thread(target=self._telemetry_worker, daemon=True).start()
 
-
+        self.library_scanner = LocalLibraryScanner(self)
 
 
     def _get_installation_id(self):
@@ -1134,44 +1137,43 @@ class RPCBackend:
 
 
         try:
-
-
             conn = sqlite3.connect(self.db_path)
-
-
             c = conn.cursor()
-
-
             c.execute("""CREATE TABLE IF NOT EXISTS history
-
-
                          (id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-
                           title TEXT,
-
-
                           episode_str TEXT,
-
-
                           is_music BOOLEAN,
-
-
                           watch_duration INTEGER,
-
-
                           timestamp DATETIME)""")
 
+            c.execute("""CREATE TABLE IF NOT EXISTS library_folders
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          path TEXT UNIQUE,
+                          is_enabled BOOLEAN DEFAULT 1)""")
+
+            c.execute("""CREATE TABLE IF NOT EXISTS local_media
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          absolute_path TEXT UNIQUE,
+                          filename TEXT,
+                          extension TEXT,
+                          file_size INTEGER,
+                          mtime REAL,
+                          last_scanned REAL,
+                          media_type TEXT,
+                          title TEXT,
+                          alt_title TEXT,
+                          season INTEGER,
+                          episode INTEGER,
+                          episode_title TEXT,
+                          anilist_id INTEGER,
+                          duration INTEGER,
+                          cover_url TEXT,
+                          is_active BOOLEAN DEFAULT 1)""")
 
             conn.commit()
-
-
             conn.close()
-
-
-        except Exception:
-
-
+        except Exception as e:
             pass
 
 
@@ -6874,6 +6876,139 @@ class RPCBackend:
 
 
 
+class LocalLibraryScanner(threading.Thread):
+    def __init__(self, backend):
+        super().__init__(daemon=True)
+        self.backend = backend
+        self.is_running = False
+        self.cancel_requested = False
+
+    def scan(self):
+        if self.is_running:
+            return False
+        self.cancel_requested = False
+        self.is_running = True
+        threading.Thread(target=self._scan_thread, daemon=True).start()
+        return True
+
+    def cancel(self):
+        self.cancel_requested = True
+
+    def _scan_thread(self):
+        try:
+            self.backend.log("Starting library scan...", toast_title="Library Scan", toast_icon="info")
+            db_path = getattr(self.backend, 'db_path', None)
+            if not db_path:
+                return
+
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            
+            c.execute("SELECT path FROM library_folders WHERE is_enabled=1")
+            folders = [row[0] for row in c.fetchall()]
+            
+            if not folders:
+                self.backend.log("No library folders configured.")
+                return
+
+            found_paths = set()
+            extensions = {'.mkv', '.mp4', '.avi', '.webm', '.mp3', '.flac'}
+            
+            for folder in folders:
+                if self.cancel_requested:
+                    break
+                if not os.path.isdir(folder):
+                    continue
+                    
+                for root, dirs, files in os.walk(folder):
+                    if self.cancel_requested:
+                        break
+                    for file in files:
+                        if self.cancel_requested:
+                            break
+                            
+                        ext = os.path.splitext(file)[1].lower()
+                        if ext not in extensions:
+                            continue
+                            
+                        abs_path = os.path.join(root, file)
+                        found_paths.add(abs_path)
+                        
+                        try:
+                            stat = os.stat(abs_path)
+                            fsize = stat.st_size
+                            mtime = stat.st_mtime
+                        except Exception:
+                            continue
+                            
+                        c.execute("SELECT id, file_size, mtime FROM local_media WHERE absolute_path=?", (abs_path,))
+                        row = c.fetchone()
+                        
+                        if row:
+                            media_id, old_size, old_mtime = row
+                            if old_size == fsize and old_mtime == mtime:
+                                c.execute("UPDATE local_media SET is_active=1, last_scanned=? WHERE id=?", (time.time(), media_id))
+                                continue
+                                
+                        parsed = RPCBackend._parse_response(file)
+                        title = parsed.get("title", "")
+                        episode_str = parsed.get("episode", "")
+                        season = parsed.get("season")
+                        is_music = parsed.get("is_music", False)
+                        
+                        anilist_id = None
+                        cover_url = ""
+                        media_type = "music" if is_music else "unknown"
+                        
+                        if title and not is_music:
+                            identity_key, _, _ = self.backend._anilist_identity_key(title, episode_str)
+                            with self.backend._anilist_identity_lock:
+                                cached = self.backend.anilist_identity_cache.get(identity_key)
+                            
+                            if cached and cached.get("validated") and cached.get("anilist_id"):
+                                anilist_id = cached.get("anilist_id")
+                                media_type = "anime"
+                                
+                                media_cache_key = f"media_{anilist_id}"
+                                with self.backend._anilist_media_list_lock:
+                                    media_info = self.backend.anilist_media_list_cache.get(media_cache_key)
+                                    if media_info and media_info.get("coverImage"):
+                                        cover_url = media_info["coverImage"].get("large", "")
+                        
+                        c.execute("""
+                            INSERT INTO local_media (absolute_path, filename, extension, file_size, mtime, last_scanned, media_type, title, episode_title, season, episode, anilist_id, cover_url, is_active)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                            ON CONFLICT(absolute_path) DO UPDATE SET
+                                filename=excluded.filename,
+                                file_size=excluded.file_size,
+                                mtime=excluded.mtime,
+                                last_scanned=excluded.last_scanned,
+                                media_type=excluded.media_type,
+                                title=excluded.title,
+                                episode_title=excluded.episode_title,
+                                season=excluded.season,
+                                episode=excluded.episode,
+                                anilist_id=excluded.anilist_id,
+                                cover_url=excluded.cover_url,
+                                is_active=1
+                        """, (abs_path, file, ext, fsize, mtime, time.time(), media_type, title, parsed.get("episode_title"), season, parsed.get("episode_number"), anilist_id, cover_url))
+            
+            if not self.cancel_requested:
+                if found_paths:
+                    placeholders = ",".join("?" * len(found_paths))
+                    c.execute(f"UPDATE local_media SET is_active=0 WHERE absolute_path NOT IN ({placeholders})", tuple(found_paths))
+                else:
+                    c.execute("UPDATE local_media SET is_active=0")
+            
+            conn.commit()
+            conn.close()
+            self.backend.log("Library scan completed.")
+            
+        except Exception as e:
+            self.backend.log(f"Library Scan Error: {e}")
+        finally:
+            self.is_running = False
+
 class WebApi:
     def __init__(self, backend_instance):
         self._backend = backend_instance
@@ -7283,6 +7418,142 @@ class WebApi:
                 return {"success": True}
             else:
                 return {"success": False, "error": "Revocation failed"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_library_folders(self):
+        try:
+            db_path = getattr(self._backend, 'db_path', None)
+            if not db_path: return {"success": False, "error": "No database"}
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("SELECT path, is_enabled FROM library_folders")
+            folders = [{"path": row[0], "is_enabled": bool(row[1])} for row in c.fetchall()]
+            conn.close()
+            return {"success": True, "folders": folders}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def add_library_folder(self, path):
+        try:
+            if not os.path.isdir(path):
+                return {"success": False, "error": "Invalid directory path"}
+            db_path = getattr(self._backend, 'db_path', None)
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("INSERT OR IGNORE INTO library_folders (path, is_enabled) VALUES (?, 1)", (path,))
+            conn.commit()
+            conn.close()
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def remove_library_folder(self, path):
+        try:
+            db_path = getattr(self._backend, 'db_path', None)
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("DELETE FROM library_folders WHERE path=?", (path,))
+            conn.commit()
+            conn.close()
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def scan_library(self):
+        started = getattr(self._backend, 'library_scanner').scan()
+        return {"success": started}
+
+    def cancel_library_scan(self):
+        getattr(self._backend, 'library_scanner').cancel()
+        return {"success": True}
+
+    def get_library_status(self):
+        scanner = getattr(self._backend, 'library_scanner', None)
+        return {"is_scanning": scanner.is_running if scanner else False}
+
+    def get_media_library(self):
+        try:
+            db_path = getattr(self._backend, 'db_path', None)
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("SELECT id, absolute_path, filename, extension, file_size, mtime, last_scanned, media_type, title, episode_title, season, episode, anilist_id, duration, cover_url, is_active FROM local_media WHERE is_active=1")
+            media = []
+            for row in c.fetchall():
+                media.append({
+                    "id": row[0],
+                    "absolute_path": row[1],
+                    "filename": row[2],
+                    "extension": row[3],
+                    "file_size": row[4],
+                    "mtime": row[5],
+                    "last_scanned": row[6],
+                    "media_type": row[7],
+                    "title": row[8],
+                    "episode_title": row[9],
+                    "season": row[10],
+                    "episode": row[11],
+                    "anilist_id": row[12],
+                    "duration": row[13],
+                    "cover_url": row[14]
+                })
+                
+            c.execute("SELECT title, episode_str, MAX(watch_duration) FROM history GROUP BY title, episode_str")
+            hist_map = {}
+            for row in c.fetchall():
+                key = f"{str(row[0]).lower().strip()}_{str(row[1]).lower().strip()}"
+                hist_map[key] = row[2]
+                
+            for m in media:
+                ep_str = f"Episode {m['episode']}" if m['episode'] else ""
+                key = f"{str(m['title']).lower().strip()}_{ep_str.lower()}"
+                m["watch_progress"] = hist_map.get(key, 0)
+                
+            conn.close()
+            return {"success": True, "media": media}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def play_library_media(self, media_id):
+        try:
+            db_path = getattr(self._backend, 'db_path', None)
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("SELECT absolute_path FROM local_media WHERE id=? AND is_active=1", (media_id,))
+            row = c.fetchone()
+            conn.close()
+            
+            if not row:
+                return {"success": False, "error": "Media not found or inactive"}
+                
+            abs_path = row[0]
+            
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("SELECT path FROM library_folders WHERE is_enabled=1")
+            folders = [r[0] for r in c.fetchall()]
+            conn.close()
+            
+            is_valid = False
+            for f in folders:
+                if os.path.commonpath([f, abs_path]) == os.path.normpath(f):
+                    is_valid = True
+                    break
+            
+            if not is_valid:
+                return {"success": False, "error": "Security check failed: File not in a configured library folder."}
+                
+            import urllib.parse
+            file_uri = urllib.parse.quote(f"file:///{abs_path.replace(chr(92), '/')}", safe=':/?=')
+            
+            host = self._backend.config.get("vlc_host", "127.0.0.1")
+            port = self._backend.config.get("vlc_port", 8080)
+            pwd = self._backend.config.get("vlc_password", "")
+            
+            url = f"http://{host}:{port}/requests/status.xml?command=in_play&input={file_uri}"
+            res = requests.get(url, auth=("", pwd), timeout=2)
+            
+            return {"success": True, "status": res.status_code}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

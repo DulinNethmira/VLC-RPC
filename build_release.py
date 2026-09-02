@@ -57,25 +57,26 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.7.2"
+    tag_name = "v5.7.3"
     
-    release_title = "✨ v5.7.2 - UI Polish & Analytics Hotfix!"
-    release_notes = """### 🚀 What's New in v5.7.2!
+    release_title = "✨ v5.7.3 - Local Media Library Unleashed!"
+    release_notes = """### 🚀 What's New in v5.7.3!
 
-We've polished up the UI and fixed some critical bugs to keep your Anime Wrap looking beautiful!
+We are incredibly excited to introduce the **Local Media Library** — a completely seamless way to browse, organize, and play your local files right from VLC RPC!
 
-#### 📊 Analytics Wrap Fixes
-- Fixed a bug where **Total Anime**, **Unique Episodes**, and **Completed Episodes** weren't calculating or showing up properly. Your stats are now fully functional and perfectly accurate!
-- Fixed a UI issue where the Time Range dropdown menu had unreadable white text on a white background. It's now fully visible and fits the dark mode theme!
+#### 📁 Fully Offline Media Library
+- **Add Your Folders**: Point the app to your Anime, Movies, TV Shows, and Music folders.
+- **Smart Background Scanner**: Automatically detects changes, new files, and missing files without slowing you down!
+- **Zero-Latency UI**: Instantly filter and search your entire collection, completely offline!
 
-#### 🍎 UI Enhancements
-- Fixed the Cloud Account Email input field formatting to perfectly match the Password field (say goodbye to weird lengths!).
-- Fixed an overflow issue on the VLC Connection port input field. It now neatly stays inside its container!
+#### ⏭️ Smart Continue Watching
+- **Identity-based Progress Mapping**: Unfinished episodes dynamically populate your *Continue Watching* rail.
+- **Flawless Resume**: Powered by our unified progress tracking!
 
-### 🔧 Under The Hood
-- Squashed backend formatting bugs.
+#### 🍎 Seamless Playback
+- One-click play! Launch any file directly into your active VLC player with perfect Unicode path handling!
 
-Enjoy the polish! 🎉"""
+Enjoy the new local experience! 🎉"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)

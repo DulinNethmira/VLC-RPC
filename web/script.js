@@ -966,3 +966,214 @@ function revokeCloudDevice(id) {
         }
     });
 }
+/* Library Logic */
+let libraryMedia = [];
+let currentLibFilter = 'all';
+let libraryScanInterval = null;
+
+window.openLibraryFolders = function() {
+    const el = document.getElementById('library-folders-container');
+    el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    if(el.style.display === 'block') window.fetchLibraryFolders();
+};
+
+window.fetchLibraryFolders = function() {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.get_library_folders().then(data => {
+            if(data.success) {
+                const list = document.getElementById('folders-list');
+                list.innerHTML = data.folders.map(f => `
+                    <li style="display: flex; justify-content: space-between; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px;">
+                        <span>${f.path}</span>
+                        <button onclick="removeLibraryFolder('${f.path.replace(/\\/g, '\\\\')}')" style="background: none; border: none; color: #ff4d4d; cursor: pointer;"><i class="fas fa-trash"></i></button>
+                    </li>
+                `).join('');
+            }
+        });
+    }
+};
+
+window.addLibraryFolder = function() {
+    const path = document.getElementById('new-folder-path').value;
+    if(!path) return;
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.add_library_folder(path).then(data => {
+            if(data.success) {
+                document.getElementById('new-folder-path').value = '';
+                window.fetchLibraryFolders();
+                window.scanLibrary();
+            } else {
+                alert("Error: " + data.error);
+            }
+        });
+    }
+};
+
+window.removeLibraryFolder = function(path) {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.remove_library_folder(path).then(data => {
+            if(data.success) window.fetchLibraryFolders();
+        });
+    }
+};
+
+window.scanLibrary = function() {
+    const btn = document.getElementById('btn-scan-library');
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning...';
+    btn.disabled = true;
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.scan_library().then(() => {
+            if(!libraryScanInterval) libraryScanInterval = setInterval(window.checkLibraryScan, 2000);
+        });
+    }
+};
+
+window.checkLibraryScan = function() {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.get_library_status().then(data => {
+            if(!data.is_scanning) {
+                clearInterval(libraryScanInterval);
+                libraryScanInterval = null;
+                const btn = document.getElementById('btn-scan-library');
+                btn.innerHTML = '<i class="fas fa-sync"></i> Scan';
+                btn.disabled = false;
+                window.fetchLibraryMedia();
+            }
+        });
+    }
+};
+
+window.fetchLibraryMedia = function() {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.get_media_library().then(data => {
+            if(data.success) {
+                libraryMedia = data.media;
+                window.renderLibrary();
+                window.renderContinueWatching();
+            }
+        });
+    }
+};
+
+window.setLibraryFilter = function(f) {
+    currentLibFilter = f;
+    document.querySelectorAll('.lib-filter-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector(`.lib-filter-btn[data-filter="${f}"]`).classList.add('active');
+    window.renderLibrary();
+};
+
+window.filterLibrary = function() {
+    window.renderLibrary();
+};
+
+window.renderLibrary = function() {
+    const grid = document.getElementById('library-grid');
+    const search = (document.getElementById('library-search').value || '').toLowerCase();
+    
+    let displayList = [];
+    let seriesMap = {};
+    
+    libraryMedia.forEach(m => {
+        if(currentLibFilter !== 'all' && m.media_type !== currentLibFilter) return;
+        if(search && !(m.title || '').toLowerCase().includes(search) && !(m.filename || '').toLowerCase().includes(search)) return;
+        
+        if(m.media_type === 'anime' && m.title) {
+            if(!seriesMap[m.title]) {
+                seriesMap[m.title] = {...m, is_group: true, count: 1};
+                displayList.push(seriesMap[m.title]);
+            } else {
+                seriesMap[m.title].count++;
+            }
+        } else {
+            displayList.push(m);
+        }
+    });
+    
+    if(displayList.length === 0) {
+        grid.innerHTML = '<p class="empty-state">No media found.</p>';
+        return;
+    }
+    
+    grid.innerHTML = displayList.map(m => {
+        const title = m.title || m.filename;
+        const sub = m.is_group ? `${m.count} Episodes` : (m.episode ? `Episode ${m.episode}` : (m.media_type === 'music' ? 'Music' : 'Video'));
+        const poster = m.cover_url || 'icon.png';
+        const progressPct = m.watch_progress && m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
+        
+        return `
+            <div class="lib-media-card" onclick="playMedia(${m.id})">
+                <img src="${poster}" class="lib-media-poster" onerror="this.src='icon.png'">
+                ${progressPct > 0 ? `<div class="lib-progress-bg"><div class="lib-progress-fill" style="width: ${progressPct}%"></div></div>` : ''}
+                <div class="lib-media-info">
+                    <div class="lib-media-title">${title}</div>
+                    <div class="lib-media-sub">${sub}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+};
+
+window.renderContinueWatching = function() {
+    const rail = document.getElementById('continue-watching-rail');
+    let cw = libraryMedia.filter(m => m.watch_progress > 0 && (!m.duration || m.watch_progress < m.duration - 60)).sort((a,b) => b.watch_progress - a.watch_progress);
+    
+    let seriesSeen = new Set();
+    let uniqueCw = [];
+    for(let m of cw) {
+        let sKey = m.media_type === 'anime' ? m.title : m.id;
+        if(!seriesSeen.has(sKey)) {
+            seriesSeen.add(sKey);
+            uniqueCw.push(m);
+        }
+    }
+    
+    uniqueCw = uniqueCw.slice(0, 10);
+    
+    if(uniqueCw.length === 0) {
+        rail.innerHTML = '<p class="empty-state" style="margin: 0; padding: 12px;">No active shows.</p>';
+        document.getElementById('continue-watching-container').style.display = 'none';
+        return;
+    }
+    
+    document.getElementById('continue-watching-container').style.display = 'block';
+    
+    rail.innerHTML = uniqueCw.map(m => {
+        const title = m.title || m.filename;
+        const sub = m.episode ? `Ep ${m.episode}` : '';
+        const poster = m.cover_url || 'icon.png';
+        const progressPct = m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
+        
+        return `
+            <div class="lib-continue-card" onclick="playMedia(${m.id})">
+                <img src="${poster}" class="lib-continue-poster" onerror="this.src='icon.png'">
+                <div class="lib-continue-info">
+                    <div class="lib-continue-title">${title}</div>
+                    <div style="font-size: 0.75rem; color: rgba(255,255,255,0.6); margin-bottom: 4px;">${sub}</div>
+                    <div style="height: 4px; background: rgba(255,255,255,0.1); width: 100%; border-radius: 2px; overflow: hidden;">
+                        <div style="height: 100%; background: var(--accent-blurple); width: ${progressPct}%;"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+};
+
+window.playMedia = function(id) {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.play_library_media(id).then(data => {
+            if(!data.success) {
+                alert("Playback failed: " + data.error);
+            }
+        });
+    }
+};
+
+document.addEventListener('pywebviewready', () => {
+    document.querySelectorAll('.nav-item').forEach(el => {
+        el.addEventListener('click', (e) => {
+            if(el.dataset.tab === 'tab-library') {
+                window.fetchLibraryMedia();
+            }
+        });
+    });
+});

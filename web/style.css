@@ -761,3 +761,20 @@ select option {
     .grid-3 { grid-template-columns: 1fr; }
     .grid-2 { grid-template-columns: 1fr; }
 }
+
+
+/* Library Styles */
+.lib-media-card { background: rgba(255,255,255,0.05); border-radius: 8px; overflow: hidden; cursor: pointer; transition: transform 0.2s, background 0.2s; display: flex; flex-direction: column; position: relative; }
+.lib-media-card:hover { transform: translateY(-4px); background: rgba(255,255,255,0.1); }
+.lib-media-poster { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: #222; }
+.lib-media-info { padding: 12px; }
+.lib-media-title { font-weight: 600; font-size: 0.9rem; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lib-media-sub { font-size: 0.75rem; color: rgba(255,255,255,0.6); }
+.lib-progress-bg { height: 4px; background: rgba(255,255,255,0.1); width: 100%; position: absolute; bottom: 0; left: 0; }
+.lib-progress-fill { height: 100%; background: var(--accent-blurple); }
+.lib-continue-card { min-width: 250px; flex-shrink: 0; display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px; cursor: pointer; transition: background 0.2s; position: relative; overflow: hidden; }
+.lib-continue-card:hover { background: rgba(255,255,255,0.1); }
+.lib-continue-poster { width: 60px; height: 60px; border-radius: 4px; object-fit: cover; }
+.lib-continue-info { flex: 1; overflow: hidden; }
+.lib-continue-title { font-size: 0.9rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
