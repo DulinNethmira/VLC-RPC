@@ -45,7 +45,7 @@ def main():
         sys.exit(1)
 
     print("Building application with PyInstaller...")
-    subprocess.run([r".\venv\Scripts\pyinstaller.exe", "-y", "VLC RPC.spec"], check=True)
+    subprocess.run(["pyinstaller", "--noconfirm", "--windowed", "--icon=web/icon.ico", "--name=VLC RPC", "--add-data=web;web", "--version-file=version_info.txt", "vlc_discord_rpc_gui.py"], check=True)
 
     print("Compiling installer with Inno Setup...")
     iscc_path = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe")
