@@ -756,10 +756,8 @@ function checkUpdates() {
                 dlBtn.style.background = "";
                 dlBtn.style.borderColor = "";
                 dlBtn.style.color = "";
-                dlBtn.innerHTML = '<i class="fas fa-download"></i> Download Update';
+                dlBtn.innerHTML = '<i class="fas fa-download"></i> Download Update (Opens Browser)';
                 dlBtn.onclick = () => {
-                    dlBtn.disabled = true;
-                    dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
                     window.pywebview.api.trigger_download_update();
                 };
             }
@@ -1593,8 +1591,12 @@ async function refreshDashboardData(force = false) {
             else if (comp.state === 'ERROR') error++;
         }
         
+        let bad = degraded + error;
         let score = 100;
-        if (total > 0) score = Math.round((healthy / total) * 100);
+        if (total > 0) {
+            if (bad === 0) score = 100;
+            else score = Math.max(0, Math.round(((total - bad) / total) * 100));
+        }
         
         const healthScoreEl = document.getElementById('summary-health-score');
         const healthDetailsEl = document.getElementById('summary-health-details');

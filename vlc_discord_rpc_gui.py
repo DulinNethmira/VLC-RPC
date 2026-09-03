@@ -1343,7 +1343,12 @@ class RPCBackend:
                           episode_str TEXT,
                           is_music BOOLEAN,
                           watch_duration INTEGER,
-                          timestamp DATETIME)""")
+                          timestamp DATETIME,
+                          cover_url TEXT DEFAULT '')""")
+            try:
+                c.execute("ALTER TABLE history ADD COLUMN cover_url TEXT DEFAULT ''")
+            except Exception:
+                pass
 
             c.execute("""CREATE TABLE IF NOT EXISTS library_folders
                          (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1414,7 +1419,7 @@ class RPCBackend:
     def _flush_watch_history(self):
         if hasattr(self, 'current_watch_duration') and self.current_watch_duration > 0:
             if hasattr(self, 'last_watched_title_raw') and hasattr(self, 'last_watched_title'):
-                self.add_to_history(self.last_watched_title, getattr(self, 'last_watched_ep', ''), getattr(self, 'last_watched_music', False), self.current_watch_duration)
+                self.add_to_history(self.last_watched_title, getattr(self, 'last_watched_ep', ''), getattr(self, 'last_watched_music', False), self.current_watch_duration, getattr(self, 'last_watched_cover', ''))
             self.current_watch_duration = 0
 
 
@@ -6553,7 +6558,7 @@ class WebApi:
             c = conn.cursor()
             c.execute("""
                 SELECT h.title, h.episode_str, h.is_music, h.watch_duration, h.timestamp,
-                       (SELECT cover_url FROM local_media l WHERE (l.title = h.title OR l.filename = h.title) AND l.cover_url != '' AND l.cover_url IS NOT NULL LIMIT 1) as cover_url
+                       COALESCE(NULLIF(h.cover_url, ''), (SELECT cover_url FROM local_media l WHERE (l.title = h.title OR l.filename = h.title) AND l.cover_url != '' AND l.cover_url IS NOT NULL LIMIT 1)) as cover_url
                 FROM history h ORDER BY h.id DESC LIMIT 50
             """)
             rows = c.fetchall()

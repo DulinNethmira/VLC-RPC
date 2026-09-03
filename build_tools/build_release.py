@@ -57,9 +57,9 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v6.1.2"
-    release_title = "\u2728 v6.1.2 - Advanced Streaming Dashboard Hotfix"
-    release_notes = """### \U0001f680 What's New in v6.1.2!
+    tag_name = "v6.1.3"
+    release_title = "\u2728 v6.1.3 - Final UI Polish & Bug Fixes"
+    release_notes = """### \U0001f680 What's New in v6.1.3!
 
 We've polished the new Dashboard to feel exactly like a premium anime streaming site!
 
