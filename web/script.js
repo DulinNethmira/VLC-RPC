@@ -50,6 +50,13 @@ window.updateState = function(state) {
     if (loader.style.display !== 'none') {
         loader.style.display = 'none';
         app.style.display = 'flex';
+        
+        // Trigger startup library scan now that UI is ready
+        setTimeout(() => {
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.trigger_library_scan();
+            }
+        }, 500);
     }
 
     // Connection dots

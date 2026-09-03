@@ -74,7 +74,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.9.6"
+CURRENT_VERSION = "5.9.7"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -1056,7 +1056,6 @@ class RPCBackend:
         threading.Thread(target=self._telemetry_worker, daemon=True).start()
 
         self.library_scanner = LocalLibraryScanner(self)
-        self.library_scanner.scan()
 
     def _get_installation_id(self):
         """Get or create a persistent installation UUID from config."""
@@ -7093,6 +7092,27 @@ class LocalLibraryScanner(threading.Thread):
     def cancel(self):
         self.cancel_requested = True
 
+    def _fetch_library_anilist_id(self, title):
+        query = """
+        query ($search: String) {
+            Page(page: 1, perPage: 1) {
+                media(search: $search, type: ANIME) {
+                    id
+                    coverImage { extraLarge large }
+                }
+            }
+        }
+        """
+        try:
+            import requests
+            response = requests.post("https://graphql.anilist.co", json={"query": query, "variables": {"search": title}}, timeout=5)
+            data = response.json().get("data", {}).get("Page", {}).get("media", [])
+            if data:
+                return data[0]["id"], data[0]["coverImage"].get("extraLarge") or data[0]["coverImage"].get("large")
+        except:
+            pass
+        return None, None
+
     def _scan_thread(self):
         try:
             self.backend.notify("library_scan", "Library Scan", "Starting library scan...", priority=NotificationPriority.LOW, icon="info")
@@ -7147,15 +7167,21 @@ class LocalLibraryScanner(threading.Thread):
                         if row:
                             media_id, old_size, old_mtime = row
                             if old_size == fsize and old_mtime == mtime:
-                                c.execute("SELECT cover_url, anilist_id FROM local_media WHERE id=?", (media_id,))
+                                c.execute("SELECT cover_url, anilist_id, media_type FROM local_media WHERE id=?", (media_id,))
                                 res_cov = c.fetchone()
-                                if res_cov and res_cov[1] and not res_cov[0]:
-                                    fetched_cover = self.backend._fetch_anilist_cover(res_cov[1])
-                                    if fetched_cover:
-                                        c.execute("UPDATE local_media SET cover_url=? WHERE id=?", (fetched_cover, media_id))
-                                
-                                c.execute("UPDATE local_media SET is_active=1, last_scanned=? WHERE id=?", (time.time(), media_id))
-                                continue
+                                # If it's not music but we never got an anilist_id, don't skip! We need to try fetching it again.
+                                if res_cov:
+                                    cover, old_a_id, old_mtype = res_cov
+                                    if old_mtype != "music" and not old_a_id:
+                                        pass # Force re-evaluation!
+                                    else:
+                                        if old_a_id and not cover:
+                                            fetched_cover = self.backend._fetch_anilist_cover(old_a_id)
+                                            if fetched_cover:
+                                                c.execute("UPDATE local_media SET cover_url=? WHERE id=?", (fetched_cover, media_id))
+                                        
+                                        c.execute("UPDATE local_media SET is_active=1, last_scanned=? WHERE id=?", (time.time(), media_id))
+                                        continue
                                 
                         parsed = clean_title(file)
                         title = parsed.get("title", "")
@@ -7185,12 +7211,6 @@ class LocalLibraryScanner(threading.Thread):
                             with self.backend._anilist_identity_lock:
                                 cached = self.backend.anilist_identity_cache.get(identity_key)
                                 
-                            if not cached and title not in tried_titles:
-                                tried_titles.add(title)
-                                self.backend._resolve_anilist_identity(identity_key, title, "")
-                                with self.backend._anilist_identity_lock:
-                                    cached = self.backend.anilist_identity_cache.get(identity_key)
-                            
                             if cached and cached.get("validated") and cached.get("anilist_id"):
                                 anilist_id = cached.get("anilist_id")
                                 media_type = "anime"
@@ -7201,6 +7221,18 @@ class LocalLibraryScanner(threading.Thread):
                                 
                                 if not cover_url:
                                     cover_url = self.backend._fetch_anilist_cover(anilist_id)
+                            else:
+                                if title not in tried_titles:
+                                    tried_titles.add(title)
+                                    if not hasattr(self, 'library_anilist_cache'):
+                                        self.library_anilist_cache = {}
+                                    a_id, c_url = self._fetch_library_anilist_id(title)
+                                    if a_id:
+                                        self.library_anilist_cache[title] = (a_id, c_url)
+                                        
+                                if hasattr(self, 'library_anilist_cache') and title in self.library_anilist_cache:
+                                    anilist_id, cover_url = self.library_anilist_cache[title]
+                                    media_type = "anime"
                         
                         c.execute("""
                             INSERT INTO local_media (absolute_path, filename, extension, file_size, mtime, last_scanned, media_type, title, episode_title, season, episode, anilist_id, cover_url, is_active)
@@ -7239,6 +7271,11 @@ class LocalLibraryScanner(threading.Thread):
 class WebApi:
     def __init__(self, backend_instance):
         self._backend = backend_instance
+
+    def trigger_library_scan(self):
+        if hasattr(self._backend, "library_scanner"):
+            return {"success": self._backend.library_scanner.scan()}
+        return {"success": False}
 
     def get_diagnostics(self):
         if getattr(self._backend, "diagnostics", None):
