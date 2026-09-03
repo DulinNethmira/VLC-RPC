@@ -75,7 +75,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.1.0"
+CURRENT_VERSION = "6.1.4"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -6550,6 +6550,12 @@ class WebApi:
     def auth_discord_widget(self):
         threading.Thread(target=self._backend.start_discord_oauth, daemon=True).start()
         return {"success": True}
+    def _get_cached_cover_for_title(self, title):
+        for m in getattr(self._backend, 'metadata_cache', {}).values():
+            if m.get('title') == title and m.get('image_url'):
+                return self._backend.normalize_cover_url(m['image_url'])
+        return ""
+
     def get_history(self):
         try:
             application_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
@@ -6575,17 +6581,21 @@ class WebApi:
                     "is_music": getattr(b, 'last_watched_music', False),
                     "duration": int(b.current_watch_duration),
                     "timestamp": "Now Playing",
-                    "live": True
+                    "live": True,
+                    "cover_url": getattr(b, 'last_watched_cover', "") or getattr(self, "_get_cached_cover_for_title", lambda x: "")(b.last_watched_title)
                 })
                 total_time += int(b.current_watch_duration)
             for r in rows:
+                c_url = r[5] if len(r) > 5 and r[5] else ""
+                if not c_url and hasattr(self, "_get_cached_cover_for_title"):
+                    c_url = self._get_cached_cover_for_title(r[0])
                 history_list.append({
                     "title": r[0],
                     "episode_str": r[1],
                     "is_music": bool(r[2]),
                     "duration": r[3],
                     "timestamp": r[4],
-                    "cover_url": r[5] if len(r) > 5 else ""
+                    "cover_url": c_url
                 })
             return {"success": True, "history": history_list, "total_time": total_time}
         except Exception as e:

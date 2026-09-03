@@ -1,0 +1,23 @@
+{
+    "client_id": "1465711556418474148",
+    "vlc_host": "localhost",
+    "vlc_port": 8080,
+    "vlc_password": "12345678",
+    "update_interval": 2,
+    "large_image_key": "vlc",
+    "large_image_text": "VLC Media Player",
+    "small_image_key": "play",
+    "small_image_text": "Playing",
+    "small_image_paused_key": "pause",
+    "small_image_paused_text": "Paused",
+    "minimize_to_tray": true,
+    "anilist_token": "",
+    "discord_client_id": "",
+    "discord_client_secret": "",
+    "discord_access_token": "",
+    "discord_refresh_token": "",
+    "auto_sync_threshold": 90,
+    "discord_app_secret": "",
+    "discord_app_id": "",
+    "github_token": "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"
+}

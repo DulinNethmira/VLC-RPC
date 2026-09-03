@@ -1055,6 +1055,7 @@ select option {
 .history-card, .airing-card {
     display: flex;
     flex-direction: column;
+    flex-shrink: 0;
     min-width: 140px;
     max-width: 160px;
     background: rgba(0,0,0,0.2);

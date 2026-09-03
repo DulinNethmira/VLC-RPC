@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VLC RPC</title>
+    <link href="fonts/fonts.css" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="fonts/fa.min.css">
+    <link rel="icon" type="image/png" href="icon.png">
+    <script src="chart.min.js"></script>
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+</head>
+<body>
+    <!-- Ambient Glow (Preserving IDs and classes expected by CSS) -->
+    <div class="ambient-glow glow-orange"></div>
+    <div class="ambient-glow glow-blurple"></div>
+
+    <!-- App Initialization Loader -->
+    <div id="loader" class="loader-container">
+        <div class="spinner"></div>
+        <p>Connecting to engines...</p>
+    </div>
+
+    <!-- Main Application Shell -->
+    <div id="app" class="app-layout" style="display: none;">
+        
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="brand">
+                <img src="icon.png" alt="Logo" class="brand-icon">
+                <h2>VLC RPC</h2>
+            </div>
+            
+            <div class="nav-links">
+                <a href="#" class="nav-item active" data-tab="tab-dashboard">
+                    <i class="fas fa-layer-group"></i> Dashboard
+                </a>
+                <a href="#" class="nav-item" data-tab="tab-library">
+                    <i class="fas fa-folder-open"></i> Local Library
+                </a>
+                <a href="#" class="nav-item" data-tab="tab-history">
+                    <i class="fas fa-chart-pie"></i> Stats & History
+                </a>
+                <a href="#" class="nav-item" data-tab="tab-analytics">
+                    <i class="fas fa-chart-bar"></i> Analytics
+                </a>
+                <a href="#" class="nav-item" data-tab="tab-integrations">
+                    <i class="fas fa-link"></i> Integrations
+                </a>
+                <a href="#" class="nav-item" data-tab="tab-anilogs">
+                    <i class="fas fa-scroll"></i> AniList Logs
+                </a>
+                <a href="#" class="nav-item" data-tab="tab-account">
+                    <i class="fas fa-user-circle"></i> Account
+                </a>
+                <a href="#" class="nav-item" data-tab="tab-preferences">
+                    <i class="fas fa-sliders-h"></i> Settings
+                </a>
+            </div>
+            
+            <div class="sidebar-footer">
+                <div class="connection-status">
+                    <div class="status-indicator">
+                        <div class="dot vlc-dot" id="vlc-dot"></div>
+                        <span>VLC Interface</span>
+                    </div>
+                    <div class="status-indicator">
+                        <div class="dot discord-dot" id="discord-dot"></div>
+                        <span>Discord RPC</span>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            
+            <!-- Dashboard Tab -->
+            <div id="tab-dashboard" class="tab-content active">
+                <header class="page-header">
+                    <h1>Dashboard</h1>
+                    <div style="display: flex; gap: var(--space-sm);">
+                        <button class="action-btn" id="btn-toggle-rpc" onclick="toggleDiscordRPC()" style="border-color: var(--color-success); color: var(--color-success);">
+                            <i class="fas fa-power-off"></i> RPC Active
+                        </button>
+                        <button class="action-btn" onclick="forceClearRPC()" style="background: rgba(255, 60, 60, 0.2); color: #ff5c5c; border-color: rgba(255, 60, 60, 0.4);">
+                            <i class="fas fa-trash"></i> Force Clear
+                        </button>
+                        <button class="action-btn" onclick="refreshStatus()">
+                            <i class="fas fa-bolt"></i> Force Sync
+                        </button>
+                    </div>
+                </header>
+
+                <div class="dashboard-grid">
+                    <!-- Now Playing Hero -->
+                    <div class="hero-card" id="now-playing-hero">
+                        <div class="hero-bg-blur" id="hero-bg-blur"></div>
+                        <div class="hero-content">
+                            <!-- Idle State -->
+                            <div class="idle-state" id="idle-state">
+                                <i class="fas fa-ghost"></i>
+                                <h3>Nothing is playing right now.</h3>
+                                <p>Fire up VLC Media Player to bring this space to life.</p>
+                            </div>
+
+                            <!-- Active State -->
+                            <div class="active-state" id="active-state" style="display: none;">
+                                <img src="" alt="Cover" class="hero-cover" id="hero-cover">
+                                <div class="hero-info">
+                                    <div class="badges-row">
+                                        <span class="hero-badge" id="hero-badge">Watching</span>
+                                        <button class="hero-badge btn-rewatch" id="btn-start-rewatch" style="display: none;" onclick="startRewatch()">↻ Start Rewatch</button>
+                                        <span class="hero-badge" id="quality-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
+                                        <span class="hero-badge" id="audio-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
+                                    </div>
+                                    <h2 class="hero-title" id="hero-title">Video Title</h2>
+                                    <p class="hero-subtitle" id="hero-subtitle">Season 1 Episode 1</p>
+                                    
+                                    <div class="progress-wrapper">
+                                        <span class="time-text" id="time-current">0:00</span>
+                                        <div class="progress-track">
+                                            <div class="progress-fill" id="progress-fill"></div>
+                                        </div>
+                                        <span class="time-text" id="time-total">24:00</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Discord Preview -->
+                    <div class="discord-preview-card">
+                        <div class="discord-header" id="dc-activity-type">WATCHING</div>
+                        <div class="discord-body">
+                            <div class="discord-assets">
+                                <img id="dc-large-img" src="icon.png" class="large">
+                                <div id="dc-small-img-container" class="small-container" style="display: none;">
+                                    <img id="dc-small-img" src="icon.png" class="small">
+                                </div>
+                            </div>
+                            <div class="discord-text">
+                                <div class="app-name">VLC Media Player</div>
+                                <div class="details" id="dc-details">Waiting for media...</div>
+                                <div class="state" id="dc-state"></div>
+                                <div class="time" id="dc-time"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Local Library Tab -->
+            <div id="tab-library" class="tab-content">
+                <header class="page-header">
+                    <h1><i class="fas fa-folder-open" style="margin-right: 8px;"></i>Local Library</h1>
+                    <div style="display: flex; gap: var(--space-sm); align-items: center;">
+                        <input type="text" id="library-search" placeholder="Search media..." oninput="filterLibrary()" style="padding: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); color: white; border: 1px solid rgba(255, 255, 255, 0.2); width: 200px;">
+                        <button class="action-btn" onclick="openLibraryFolders()">
+                            <i class="fas fa-cog"></i> Folders
+                        </button>
+                        <button class="action-btn" onclick="scanLibrary()" id="btn-scan-library">
+                            <i class="fas fa-sync"></i> Scan
+                        </button>
+                    </div>
+                </header>
+
+                <div class="glass-card" style="margin-bottom: var(--space-xl); display: none;" id="library-folders-container">
+                    <h3>Library Folders</h3>
+                    <div style="display: flex; gap: var(--space-sm); margin-top: var(--space-sm);">
+                        <input type="text" id="new-folder-path" placeholder="C:\Users\PC\Videos\Anime" style="flex: 1; padding: 8px; border-radius: 4px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white;">
+                        <button class="action-btn" onclick="addLibraryFolder()"><i class="fas fa-plus"></i> Add</button>
+                    </div>
+                    <ul id="folders-list" style="list-style: none; padding: 0; margin-top: var(--space-md); display: flex; flex-direction: column; gap: 8px;">
+                    </ul>
+                </div>
+
+                <div class="glass-card" style="margin-bottom: var(--space-xl); overflow-x: auto;" id="continue-watching-container">
+                    <h3>Continue Watching</h3>
+                    <div id="continue-watching-rail" style="display: flex; gap: var(--space-md); margin-top: var(--space-md); padding-bottom: 8px;">
+                        <p class="empty-state">No active shows.</p>
+                    </div>
+                </div>
+
+                <div class="glass-card">
+                    <div style="display: flex; gap: var(--space-sm); margin-bottom: var(--space-md); flex-wrap: wrap;">
+                        <button class="lib-filter-btn active" data-filter="all" onclick="setLibraryFilter('all')" style="padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer;">All</button>
+                        <button class="lib-filter-btn" data-filter="anime" onclick="setLibraryFilter('anime')" style="padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer;">Anime</button>
+                        <button class="lib-filter-btn" data-filter="movie" onclick="setLibraryFilter('movie')" style="padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer;">Movies</button>
+                        <button class="lib-filter-btn" data-filter="tv" onclick="setLibraryFilter('tv')" style="padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; cursor: pointer;">TV</button>
+                    </div>
+                    <div id="library-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: var(--space-md);">
+                        <p class="empty-state">Loading library...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats & History Tab -->
+            <div id="tab-history" class="tab-content">
+                <header class="page-header">
+                    <h1>Stats & History</h1>
+                    <button class="action-btn" onclick="fetchStats()">
+                        <i class="fas fa-sync"></i> Refresh Data
+                    </button>
+                </header>
+                
+                <div class="grid-2" style="margin-bottom: var(--space-xl);">
+                    <div class="glass-card" style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                        <h3>Total Watch Time</h3>
+                        <div id="total-time-large" style="font-size: 3rem; font-weight: 800; color: var(--accent-blurple); margin-top: var(--space-md);">0h 0m</div>
+                    </div>
+                    <div class="glass-card">
+                        <h3>Media Breakdown</h3>
+                        <canvas id="mediaPieChart" style="max-height: 200px; margin-top: var(--space-md);"></canvas>
+                    </div>
+                </div>
+
+                <div class="glass-card" style="margin-bottom: var(--space-xl);">
+                    <h3>Weekly Watch Activity (Hours)</h3>
+                    <canvas id="weeklyBarChart" style="max-height: 240px; margin-top: var(--space-md);"></canvas>
+                </div>
+
+                <div class="glass-card">
+                    <h3><i class="fas fa-history"></i> Recent History</h3>
+                    <div id="history-list" style="margin-top: var(--space-md);">
+                        <p class="empty-state">Loading history...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analytics Tab (Anime Wrap) -->
+            <div id="tab-analytics" class="tab-content">
+                <header class="page-header">
+                    <h1><i class="fas fa-chart-bar" style="margin-right: 8px;"></i>Your Anime Wrap</h1>
+                    <div style="display: flex; gap: var(--space-sm); align-items: center;">
+                        <select id="time-range-select" class="dropdown" onchange="loadAnalytics()" style="padding: 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); color: white; border: 1px solid rgba(255, 255, 255, 0.2);">
+                            <option value="today">Today</option>
+                            <option value="week">This Week</option>
+                            <option value="month">This Month</option>
+                            <option value="year">This Year</option>
+                            <option value="all" selected>All Time</option>
+                        </select>
+                        <button class="action-btn" onclick="shareAnimeWrap()" style="background: linear-gradient(135deg,#6366f1,#8b5cf6); border: none; color: white;">
+                            <i class="fas fa-camera"></i> Share Wrap
+                        </button>
+                        <button class="action-btn" onclick="loadAnalytics()">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
+                    </div>
+                </header>
+
+                <div class="grid-3" style="margin-bottom: var(--space-xl);">
+                    <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
+                        <div style="font-size: 2.2rem; font-weight: 700; color: #a78bfa;" id="ana-total-hours">--</div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Total Watch Time</div>
+                    </div>
+                    <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
+                        <div style="font-size: 2.2rem; font-weight: 700; color: #38bdf8;" id="ana-total-anime">--</div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Total Anime</div>
+                    </div>
+                    <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
+                        <div style="font-size: 2.2rem; font-weight: 700; color: #34d399;" id="ana-unique-episodes">--</div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Unique Episodes</div>
+                    </div>
+                </div>
+                
+                <div class="grid-2" style="margin-bottom: var(--space-xl);">
+                    <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
+                        <div style="font-size: 2rem; font-weight: 700; color: #f472b6;" id="ana-completed-episodes">--</div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Completed Episodes</div>
+                    </div>
+                    <div class="glass-card" style="text-align: center; padding: var(--space-xl) var(--space-md);">
+                        <div style="font-size: 1.8rem; font-weight: 700; color: #fbbf24; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" id="ana-binge-day">--</div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; font-weight: 500;">Most Binge-Watched Day</div>
+                    </div>
+                </div>
+
+                <div class="grid-2">
+                    <div class="glass-card">
+                        <h3><i class="fas fa-fire" style="color: #f97316;"></i> 7-Day Activity</h3>
+                        <canvas id="ana-weekly-chart" height="180" style="margin-top: var(--space-md);"></canvas>
+                    </div>
+                    <div class="glass-card">
+                        <h3><i class="fas fa-trophy" style="color: #fbbf24;"></i> Most Watched</h3>
+                        <div id="ana-top-list" style="display: flex; flex-direction: column; gap: var(--space-sm); margin-top: var(--space-md);"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Integrations Tab -->
+            <div id="tab-integrations" class="tab-content">
+                <header class="page-header">
+                    <h1>Integrations</h1>
+                    <button class="action-btn primary" onclick="saveConfig()">
+                        <i class="fas fa-check"></i> Save Integrations
+                    </button>
+                </header>
+
+                <div class="settings-grid">
+                    <div class="glass-card">
+                        <h3><i class="fas fa-tv"></i> AniList Auto-Tracking</h3>
+                        <p class="hint" style="margin-bottom: var(--space-md);">Automatically update your AniList episode progress when you finish watching.</p>
+                        
+                        <div class="input-group">
+                            <label>AniList Client ID</label>
+                            <input type="text" id="anilist_client_id" placeholder="Application ID...">
+                        </div>
+                        <div class="input-group">
+                            <label>AniList Client Secret</label>
+                            <input type="password" id="anilist_client_secret" placeholder="Client Secret...">
+                            <span class="hint">Found in AniList Developer Settings. Requires "http://localhost:8899" as Redirect URI.</span>
+                        </div>
+                        <div class="input-group" style="margin: var(--space-md) 0;">
+                            <button id="btn-anilist-login" class="action-btn" style="width: 100%; justify-content: center; background: #2b2d42; border-color: #3b82f6;">
+                                <i class="fas fa-link"></i> <span>Connect AniList Account</span>
+                            </button>
+                            <input type="hidden" id="anilist_token" value="">
+                        </div>
+                        <div class="input-group">
+                            <label>Auto-Sync Threshold (%)</label>
+                            <input type="number" id="auto_sync_threshold" value="90" min="50" max="100">
+                            <span class="hint">Percentage of video watched before syncing.</span>
+                        </div>
+                        <div class="input-group" style="margin-top: var(--space-md);">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="aniskip_auto_skip">
+                                <span>AniSkip — Auto-Skip Openings & Endings</span>
+                            </label>
+                            <span class="hint" style="margin-left: 44px;">Automatically jumps over OP/ED when detected.</span>
+                        </div>
+                        <div class="input-group" style="margin-top: var(--space-md);">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="auto_score_popup" checked>
+                                <span>Auto-Score Popup on Completion</span>
+                            </label>
+                            <span class="hint" style="margin-left: 44px;">Shows a rating popup when you finish a series.</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3><i class="fab fa-discord"></i> Discord Widget Sync</h3>
+                        <p class="hint" style="margin-bottom: var(--space-md);">Sync your AniList total stats directly to your Custom Discord Profile Widget (v2) and Linked Roles.</p>
+                        
+                        <div class="input-group">
+                            <label>Discord Application ID</label>
+                            <input type="text" id="discord_widget_app_id" placeholder="Application ID for Profile Widget v2...">
+                        </div>
+                        <div class="input-group">
+                            <label>Discord Bot Token</label>
+                            <input type="password" id="discord_widget_bot_token" placeholder="Bot Token for Profile Widget v2...">
+                        </div>
+                        <div class="input-group">
+                            <label>Discord User ID</label>
+                            <input type="text" id="discord_widget_user_id" placeholder="Your User ID for Profile Widget v2...">
+                        </div>
+                        
+                        <div style="border-top: 1px solid var(--border-color); margin: var(--space-lg) 0; padding-top: var(--space-lg);"></div>
+                        
+                        <div class="input-group">
+                            <label>Discord Client ID (Legacy Linked Roles)</label>
+                            <input type="text" id="discord_app_id" placeholder="Application ID...">
+                        </div>
+                        <div class="input-group">
+                            <label>Discord Client Secret (Legacy Linked Roles)</label>
+                            <input type="password" id="discord_app_secret" placeholder="Client Secret...">
+                        </div>
+                        
+                        <div style="display: flex; gap: var(--space-sm); margin-top: var(--space-lg);">
+                            <button class="action-btn primary" style="flex: 1; justify-content: center;" onclick="window.pywebview.api.auth_discord_widget()">
+                                <i class="fas fa-lock"></i> Link Roles
+                            </button>
+                            <button class="action-btn" style="flex: 1; justify-content: center;" onclick="window.pywebview.api.sync_discord_widget()">
+                                <i class="fas fa-sync"></i> Force Sync
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AniList Logs Tab -->
+            <div id="tab-anilogs" class="tab-content">
+                <header class="page-header">
+                    <h1>AniList Logs</h1>
+                    <button class="action-btn" onclick="clearAniLogs()">
+                        <i class="fas fa-trash"></i> Clear
+                    </button>
+                </header>
+                <div class="glass-card" style="padding: 0; overflow: hidden;">
+                    <div id="anilog-list" class="log-container">
+                        <p class="empty-state">No AniList activity yet. Start playing an anime episode to see logs here.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Account Tab -->
+            <div id="tab-account" class="tab-content">
+                <header class="page-header">
+                    <h1>Cloud Account (Optional)</h1>
+                </header>
+
+                <div class="settings-grid">
+                    <div class="glass-card" id="account-logged-out">
+                        <h3><i class="fas fa-sign-in-alt"></i> Sign In / Register</h3>
+                        <p class="hint" style="margin-bottom: var(--space-md);">Link your VLC RPC installations across devices to track unified statistics.</p>
+                        
+                        <div class="input-group">
+                            <label>Email Address</label>
+                            <input type="email" id="cloud_email" placeholder="Email...">
+                        </div>
+                        <div class="input-group">
+                            <label>Password</label>
+                            <input type="password" id="cloud_password" placeholder="Password...">
+                        </div>
+                        <div style="display: flex; gap: var(--space-sm); margin-top: var(--space-md);">
+                            <button class="action-btn primary" style="flex: 1; justify-content: center;" onclick="cloudLogin()">
+                                <i class="fas fa-sign-in-alt"></i> Login
+                            </button>
+                            <button class="action-btn" style="flex: 1; justify-content: center;" onclick="cloudRegister()">
+                                <i class="fas fa-user-plus"></i> Register
+                            </button>
+                        </div>
+                        <p class="hint" style="margin-top: var(--space-md);">This is entirely optional. VLC RPC works fully offline.</p>
+                    </div>
+
+                    <div class="glass-card" id="account-logged-in" style="display: none;">
+                        <h3><i class="fas fa-user-check"></i> Connected Account</h3>
+                        <div style="margin: var(--space-md) 0; padding: var(--space-md); background: rgba(0,0,0,0.2); border-radius: var(--radius-sm);">
+                            <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 4px;">Logged in as:</div>
+                            <div id="cloud_current_email" style="font-weight: 700; font-size: 1.1rem; color: var(--accent-blurple);">--</div>
+                        </div>
+                        
+                        <div id="cloud_devices_section" style="margin-top: var(--space-lg);">
+                            <h4 style="margin-bottom: var(--space-sm);"><i class="fas fa-laptop"></i> Connected Devices</h4>
+                            <div id="cloud_devices_list" style="display: flex; flex-direction: column; gap: var(--space-sm); max-height: 200px; overflow-y: auto;">
+                                <!-- Devices will be populated here -->
+                            </div>
+                        </div>
+
+                        <button class="action-btn" style="width: 100%; justify-content: center; border-color: #ef4444; color: #ef4444; margin-top: var(--space-xl);" onclick="cloudLogout()">
+                            <i class="fas fa-sign-out-alt"></i> Log Out
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings (Preferences) Tab -->
+            <div id="tab-preferences" class="tab-content">
+                <header class="page-header">
+                    <h1>Settings</h1>
+                    <div style="display: flex; gap: var(--space-sm);">
+                        <button class="action-btn" onclick="checkUpdates()">
+                            <i class="fas fa-arrow-up"></i> Check for Updates
+                        </button>
+                        <button class="action-btn primary" onclick="saveConfig()">
+                            <i class="fas fa-check"></i> Save Changes
+                        </button>
+                    </div>
+                </header>
+
+                <div class="settings-grid">
+                    <div class="glass-card">
+                        <h3><i class="fas fa-palette"></i> Custom Accent Theme</h3>
+                        <div class="input-group">
+                            <label>App Theme Color</label>
+                            <select id="theme_selector" onchange="applyTheme(this.value)">
+                                <option value="#5865F2">Discord Blurple</option>
+                                <option value="#f43f5e">Ruby Red</option>
+                                <option value="#10b981">Emerald Green</option>
+                                <option value="#8b5cf6">Neon Purple</option>
+                                <option value="#f59e0b">Sunset Orange</option>
+                                <option value="#ec4899">Hot Pink</option>
+                                <option value="#06b6d4">Cyan Blue</option>
+                            </select>
+                            <span class="hint">Change the core accent color of the application.</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3><i class="fas fa-network-wired"></i> VLC Connection</h3>
+                        <div class="input-row">
+                            <div class="input-group">
+                                <label>Host IP</label>
+                                <input type="text" id="vlc_host" value="localhost">
+                            </div>
+                            <div class="input-group">
+                                <label>Port</label>
+                                <input type="number" id="vlc_port" value="8080">
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label>HTTP Password</label>
+                            <input type="password" id="vlc_password" placeholder="Enter VLC password...">
+                            <span class="hint">Required for the RPC to extract metadata from VLC.</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3><i class="fas fa-brain"></i> Smart AI Title Recognition</h3>
+                        <div class="input-group">
+                            <label>Gemini API Key (Optional)</label>
+                            <input type="password" id="gemini_api_key" placeholder="AI Studio Key">
+                            <span class="hint">Get a free key from <a href="javascript:void(0)" onclick="pywebview.api.open_url('https://aistudio.google.com/app/apikey')">Google AI Studio</a>. Uses AI to parse messy filenames into perfect AniList matches!</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3><i class="fab fa-discord"></i> Discord Configuration</h3>
+                        <div class="input-group">
+                            <label>Developer Application ID</label>
+                            <input type="text" id="client_id" placeholder="Default Demo ID">
+                            <span class="hint">Only override this if you created your own Discord app portal.</span>
+                        </div>
+                        <div class="input-group" style="margin-top: var(--space-md);">
+                            <label>Live Scene Snapshots</label>
+                            <select id="scene_snapshots">
+                                <option value="true">Enabled (Upload frames to Discord)</option>
+                                <option value="false">Disabled (Only use static cover art)</option>
+                            </select>
+                            <span class="hint">Uploads a frame from the video every 5 minutes for Discord cover art.</span>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3><i class="fas fa-chart-line"></i> Usage Statistics (Cloud)</h3>
+                        <div class="input-group">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="telemetry_enabled" checked>
+                                <span>Enable Anonymous Telemetry</span>
+                            </label>
+                        </div>
+                        <p class="hint" style="margin-top: var(--space-md); margin-bottom: var(--space-xs);">
+                            <strong>What is collected:</strong> Pseudonymous/random installation ID, VLC RPC Version, Platform.<br>
+                            <strong>What is NEVER collected:</strong> Anime/video names, Watch History, AniList info, Discord messages, Local files, Passwords, Hardware Identifiers.<br>
+                        </p>
+                        <p class="hint">
+                            Aggregate metrics contain no direct user identifiers and are designed to minimize personal data.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Interactive Developer Console -->
+            <div id="dev-console" class="dev-console collapsed">
+                <div class="console-header" onclick="toggleConsole()">
+                    <span><i class="fas fa-terminal" style="margin-right: 6px;"></i>Live Logs</span>
+                    <i class="fas fa-chevron-up" id="console-toggle-icon"></i>
+                </div>
+                <div class="console-body" id="console-body">
+                    <!-- Logs injected here -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Update Available Modal -->
+    <div id="update-modal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.8); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); align-items:center; justify-content:center;">
+        <div class="glass-card" style="max-width:440px; width:90%; padding: var(--space-xl);">
+            <div style="display:flex; align-items:center; gap:var(--space-md); margin-bottom:var(--space-lg);">
+                <div style="background:linear-gradient(135deg,#6366f1,#8b5cf6); border-radius:var(--radius-md); width:48px; height:48px; display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0;">🚀</div>
+                <div>
+                    <h2 style="margin:0; font-size:1.1rem; color:var(--text-primary); font-weight:700;">Update Available</h2>
+                    <p id="update-version-label" style="margin:4px 0 0; font-size:0.85rem; color:var(--text-secondary);">Checking version...</p>
+                </div>
+            </div>
+            <div id="update-changelog-box" style="background:rgba(255,255,255,0.03); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:var(--space-md); font-size:0.85rem; color:var(--text-secondary); line-height:1.6; max-height:160px; overflow-y:auto; margin-bottom:var(--space-xl); white-space:pre-wrap; word-break:break-word;"></div>
+            <div style="display:flex; gap:var(--space-sm);">
+                <button id="update-download-btn" onclick="" class="action-btn primary" style="flex:1; justify-content:center; padding:10px 0;">
+                    <i class="fas fa-download"></i> Download v<span id="update-btn-ver"></span>
+                </button>
+                <button onclick="document.getElementById('update-modal').style.display='none'" class="action-btn" style="padding:10px 20px;">
+                    Later
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Episode Modal -->
+    <div id="episode-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
+        <div style="background: var(--bg-dark); border-radius: 12px; width: 90%; max-width: 500px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
+            <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
+                <h3 id="episode-modal-title" style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Select Episode</h3>
+                <button onclick="document.getElementById('episode-modal').style.display='none'" style="background: none; border: none; color: rgba(255,255,255,0.6); font-size: 1.2rem; cursor: pointer;"><i class="fas fa-times"></i></button>
+            </div>
+            <div id="episode-modal-list" style="overflow-y: auto; padding: 8px;">
+                <!-- Episodes populated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

@@ -1736,7 +1736,7 @@ async function refreshDashboardData(force = false) {
                     </div>
                 </div>
                 <div class="history-info">
-                    <div class="history-title" title="${item.title.romaji}">${item.title.romaji}</div>
+                    <div class="history-title" title="${item.title.english || item.title.romaji}">${item.title.english || item.title.romaji}</div>
                     <div class="history-meta" style="color:var(--accent-blurple);">Ep ${item.nextAiringEpisode.episode} • ${timeStr}</div>
                 </div>
             </div>
