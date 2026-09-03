@@ -28,7 +28,7 @@ try:
     import guessit
 except ImportError:
     guessit = None
-from pypresence import Presence
+from pypresence import Presence, ActivityType
 import webview
 import pystray
 from PIL import Image
@@ -73,7 +73,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.9.1"
+CURRENT_VERSION = "5.9.2"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -5802,6 +5802,7 @@ class RPCBackend:
 
 
                         if media_type == "music":
+                            kwargs["activity_type"] = ActivityType.LISTENING
                             kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
 
 
@@ -5812,6 +5813,7 @@ class RPCBackend:
 
 
                         elif media_type == "movie":
+                            kwargs["activity_type"] = ActivityType.WATCHING
                             kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
 
 
@@ -5888,6 +5890,7 @@ class RPCBackend:
 
 
                             # tv_show or anime
+                            kwargs["activity_type"] = ActivityType.WATCHING
                             watch_mode = self.state_data.get("watch_mode", "NORMAL")
                             cleaned_title = self.state_data.get("cleaned_title", self.state_data["title"])
                             kwargs["details"] = f"🔄 Rewatching {cleaned_title}" if watch_mode == "REWATCH" else cleaned_title
