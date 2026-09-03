@@ -5987,8 +5987,63 @@ class RPCBackend:
 
 
 
+    def get_airing_schedule(self):
+        if hasattr(self, '_cached_airing_schedule'):
+            if time.time() - self._cached_airing_time < 3600:
+                return self._cached_airing_schedule
+                
+        token = self.config.get("anilist_token", "").strip()
+        if not token:
+            return {"error": "Not authenticated"}
+            
+        query = """
+        query {
+          Page(page: 1, perPage: 10) {
+            mediaList(status: CURRENT, type: ANIME) {
+              media {
+                title { romaji english }
+                nextAiringEpisode { episode timeUntilAiring airingAt }
+                coverImage { medium }
+              }
+            }
+          }
+        }
+        """
+        import requests
+        try:
+            r = requests.post(
+                "https://graphql.anilist.co",
+                json={"query": query},
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                timeout=5
+            )
+            if r.status_code == 200:
+                data = r.json()
+                items = data.get("data", {}).get("Page", {}).get("mediaList", [])
+                results = []
+                for item in items:
+                    media = item.get("media")
+                    if media and media.get("nextAiringEpisode"):
+                        results.append(media)
+                results.sort(key=lambda x: x["nextAiringEpisode"]["timeUntilAiring"])
+                self._cached_airing_schedule = {"status": "ok", "items": results}
+                self._cached_airing_time = time.time()
+                return self._cached_airing_schedule
+            else:
+                if hasattr(self, '_cached_airing_schedule'):
+                    return {"status": "offline", "items": self._cached_airing_schedule.get("items", [])}
+                return {"error": f"HTTP {r.status_code}"}
+        except Exception as e:
+            if hasattr(self, '_cached_airing_schedule'):
+                return {"status": "offline", "items": self._cached_airing_schedule.get("items", [])}
+            return {"error": str(e)}
 
-
+    def get_anilist_sync_status(self):
+        return {
+            "queue_size": 0,
+            "last_logs": self.anilist_logs[-5:],
+            "state": "ERROR" if self.anilist_logs and "Error" in self.anilist_logs[-1] else "HEALTHY"
+        }
 
 class LocalLibraryScanner(threading.Thread):
     def __init__(self, backend):
@@ -6213,6 +6268,10 @@ class WebApi:
         return []
     def get_state(self):
         return self._backend.state_data
+    def get_airing_schedule(self):
+        return self._backend.get_airing_schedule()
+    def get_anilist_sync_status(self):
+        return self._backend.get_anilist_sync_status()
     def get_config(self):
         return self._backend.config
     def toggle_rpc(self):

@@ -57,24 +57,24 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v6.0.2"
-    release_title = "\u2728 v6.0.2 - Metadata Formatting & OVA Sync Fixes"
-    release_notes = """### \U0001f680 What's New in v6.0.2!
+    tag_name = "v6.1.0"
+    release_title = "\u2728 v6.1.0 - Massive Dashboard Redesign!"
+    release_notes = """### \U0001f680 What's New in v6.1.0!
 
-We've completely overhauled how VLC RPC handles media metadata to make it faster, safer, and much more accurate.
+We've completely overhauled the VLC RPC Dashboard to give you a true command center experience. 
 
-#### 🧠 Production Metadata Engine
-- **Centralized Pipeline**: All metadata parsing is now handled by a dedicated engine.
-- **Dual-Key Caching**: Renaming or moving your files no longer breaks your cached metadata!
-- **Negative Caching**: The app will no longer spam APIs for unrecognized files.
-- **Deduplicated Background Resolution**: Skipping rapidly through a season won't launch dozens of identical requests.
+#### 🎨 Brand New Dashboard Layout
+- **Hero Display**: Now features the active Anime Sync Status directly on the cover art.
+- **Summary Cards**: Quick stats for Today's watch time, AniList Sync Queue, and System Health.
+- **Airing Soon**: Never miss an episode! The dashboard now fetches and caches the next airing times for the anime you're currently watching.
+- **Smart Activity Feed**: We filtered out the technical noise so you only see what matters (started watching, finished episode, synced).
 
-#### 🔧 Fixes & Tweaks
-- Fully eliminated race conditions where older metadata requests could overwrite newer ones.
-- Built-in crash resilience using atomic file writes for `metadata_cache.json`.
-- Legacy cache files are automatically upgraded to the new rich format on load.
+#### 🔍 Quality of Life
+- **Dashboard Scale**: Added a new zoom slider in Settings (70% - 130%) so you can size the dashboard perfectly without affecting other tabs.
+- **Action Required Banner**: Instantly know when something goes wrong with AniList syncs or system health.
 
-Enjoy the new update! 🎉"""
+Enjoy the new look! 🎉
+"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)

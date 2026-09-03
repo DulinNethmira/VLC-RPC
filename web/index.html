@@ -80,24 +80,31 @@
         <main class="content-area">
             
             <!-- Dashboard Tab -->
+            <!-- Dashboard Tab -->
             <div id="tab-dashboard" class="tab-content active">
-                <header class="page-header">
-                    <h1>Dashboard</h1>
-                    <div style="display: flex; gap: var(--space-sm);">
-                        <button class="action-btn" id="btn-toggle-rpc" onclick="toggleDiscordRPC()" style="border-color: var(--color-success); color: var(--color-success);">
-                            <i class="fas fa-power-off"></i> RPC Active
-                        </button>
-                        <button class="action-btn" onclick="forceClearRPC()" style="background: rgba(255, 60, 60, 0.2); color: #ff5c5c; border-color: rgba(255, 60, 60, 0.4);">
-                            <i class="fas fa-trash"></i> Force Clear
-                        </button>
-                        <button class="action-btn" onclick="refreshStatus()">
-                            <i class="fas fa-bolt"></i> Force Sync
-                        </button>
-                    </div>
-                </header>
+                <!-- Action Required Banner (Hidden by default) -->
+                <div id="dashboard-action-required" class="action-required-banner" style="display: none;">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span id="dashboard-action-msg">Action required.</span>
+                    <button class="action-btn" id="dashboard-action-btn" style="padding: 4px 12px; font-size: 12px;">Resolve</button>
+                </div>
+                
+                <!-- Dashboard Scale Wrapper -->
+                <div id="dashboard-scale-wrapper" class="dashboard-scale-wrapper">
+                    <header class="page-header dashboard-header">
+                        <h1>Dashboard</h1>
+                        <div class="dashboard-header-controls" style="display: flex; gap: var(--space-sm); align-items: center;">
+                            <input type="text" id="dashboard-global-search" placeholder="Search library..." onkeydown="if(event.key === 'Enter') handleDashboardSearch()" style="padding: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); color: white; border: 1px solid rgba(255, 255, 255, 0.2); width: 250px;">
+                            <button class="action-btn" id="btn-toggle-rpc-dash" onclick="toggleDiscordRPC()" style="border-color: var(--color-success); color: var(--color-success);">
+                                <i class="fas fa-power-off"></i> RPC Active
+                            </button>
+                            <button class="action-btn" onclick="refreshDashboardData(true)">
+                                <i class="fas fa-sync"></i> Refresh
+                            </button>
+                        </div>
+                    </header>
 
-                <div class="dashboard-grid">
-                    <!-- Now Playing Hero -->
+                    <!-- A. Now Playing Hero -->
                     <div class="hero-card" id="now-playing-hero">
                         <div class="hero-bg-blur" id="hero-bg-blur"></div>
                         <div class="hero-content">
@@ -117,6 +124,7 @@
                                         <button class="hero-badge btn-rewatch" id="btn-start-rewatch" style="display: none;" onclick="startRewatch()">↻ Start Rewatch</button>
                                         <span class="hero-badge" id="quality-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
                                         <span class="hero-badge" id="audio-badge" style="background: rgba(255, 255, 255, 0.1); color: #fff; display: none;"></span>
+                                        <span class="hero-badge" id="anilist-status-badge" style="background: rgba(61, 180, 242, 0.2); color: #3db4f2; display: none;"><i class="fas fa-cloud"></i> Synced</span>
                                     </div>
                                     <h2 class="hero-title" id="hero-title">Video Title</h2>
                                     <p class="hero-subtitle" id="hero-subtitle">Season 1 Episode 1</p>
@@ -133,21 +141,71 @@
                         </div>
                     </div>
 
-                    <!-- Discord Preview -->
-                    <div class="discord-preview-card">
-                        <div class="discord-header" id="dc-activity-type">WATCHING</div>
-                        <div class="discord-body">
-                            <div class="discord-assets">
-                                <img id="dc-large-img" src="icon.png" class="large">
-                                <div id="dc-small-img-container" class="small-container" style="display: none;">
-                                    <img id="dc-small-img" src="icon.png" class="small">
+                    <!-- B. Three Compact Summary Cards -->
+                    <div class="summary-cards-grid">
+                        <div class="summary-card glass-card">
+                            <div class="summary-icon"><i class="fas fa-calendar-day"></i></div>
+                            <div class="summary-details">
+                                <span class="summary-title">TODAY</span>
+                                <span class="summary-value" id="summary-today-time">0h 0m</span>
+                                <span class="summary-subtext" id="summary-today-eps">0 episodes</span>
+                            </div>
+                        </div>
+                        <div class="summary-card glass-card">
+                            <div class="summary-icon"><i class="fas fa-sync-alt"></i></div>
+                            <div class="summary-details">
+                                <span class="summary-title">ANILIST SYNC</span>
+                                <span class="summary-value" id="summary-sync-state">HEALTHY</span>
+                                <span class="summary-subtext" id="summary-sync-details">0 pending</span>
+                            </div>
+                        </div>
+                        <div class="summary-card glass-card">
+                            <div class="summary-icon"><i class="fas fa-heartbeat"></i></div>
+                            <div class="summary-details">
+                                <span class="summary-title">SYSTEM HEALTH</span>
+                                <span class="summary-value" id="summary-health-score">100%</span>
+                                <span class="summary-subtext" id="summary-health-details">All systems online</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-lower-grid">
+                        <div class="dashboard-left-col">
+                            <!-- C. Continue Watching -->
+                            <div class="glass-card dashboard-section">
+                                <h3>Continue Watching</h3>
+                                <div id="dashboard-continue-rail" class="horizontal-rail">
+                                    <p class="empty-state">No recent activity.</p>
                                 </div>
                             </div>
-                            <div class="discord-text">
-                                <div class="app-name">VLC Media Player</div>
-                                <div class="details" id="dc-details">Waiting for media...</div>
-                                <div class="state" id="dc-state"></div>
-                                <div class="time" id="dc-time"></div>
+
+                            <!-- D. Airing Soon -->
+                            <div class="glass-card dashboard-section" id="dashboard-airing-section">
+                                <h3>Airing Soon <span id="airing-offline-badge" style="display:none; font-size:11px; color:#aaa; margin-left:8px;">(Cached)</span></h3>
+                                <div id="dashboard-airing-rail" class="horizontal-rail">
+                                    <p class="empty-state">Loading schedule...</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="dashboard-right-col">
+                            <!-- F. Quick Actions -->
+                            <div class="glass-card dashboard-section">
+                                <h3>Quick Actions</h3>
+                                <div class="quick-actions-grid">
+                                    <button onclick="document.querySelector('[data-tab=\'tab-library\']').click()"><i class="fas fa-folder-open"></i> Library</button>
+                                    <button onclick="document.querySelector('[data-tab=\'tab-history\']').click()"><i class="fas fa-chart-pie"></i> Statistics</button>
+                                    <button onclick="document.querySelector('[data-tab=\'tab-diagnostics\']').click()"><i class="fas fa-stethoscope"></i> Diagnostics</button>
+                                    <button onclick="document.querySelector('[data-tab=\'tab-preferences\']').click()"><i class="fas fa-cog"></i> Settings</button>
+                                </div>
+                            </div>
+
+                            <!-- E. Recent Activity -->
+                            <div class="glass-card dashboard-section">
+                                <h3>Recent Activity</h3>
+                                <div id="dashboard-activity-list" class="activity-timeline">
+                                    <p class="empty-state">No recent activity.</p>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -469,6 +527,18 @@
                             <select id="theme_selector" onchange="applyTheme(this.value)">
                                 <option value="#5865F2">Discord Blurple</option>
                                 <option value="#f43f5e">Ruby Red</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-card">
+                        <h3><i class="fas fa-search-plus"></i> Dashboard Layout</h3>
+                        <div class="input-group">
+                            <label>Dashboard Scale (<span id="scale-val-label">100%</span>)</label>
+                            <input type="range" id="dashboard_scale" min="0.7" max="1.3" step="0.05" value="1.0" oninput="document.getElementById('scale-val-label').textContent = Math.round(this.value * 100) + '%'; applyDashboardScale(this.value);">
+                            <small>Adjusts the visual size of the dashboard without affecting other tabs.</small>
+                        </div>
+                    </div>
                                 <option value="#10b981">Emerald Green</option>
                                 <option value="#8b5cf6">Neon Purple</option>
                                 <option value="#f59e0b">Sunset Orange</option>

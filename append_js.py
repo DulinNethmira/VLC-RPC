@@ -1,210 +1,216 @@
-with open("web/script.js", "a", encoding="utf-8") as f:
-    f.write("""
+import os
 
-/* Diagnostics Center Logic */
-let lastDiagnosticsState = null;
+js_code = """
+// ===== Dashboard Redesign Logic =====
 
-async function updateDiagnostics() {
+let dashboardRefreshTimer = null;
+let lastDashboardStats = null;
+
+function handleDashboardSearch() {
+    const input = document.getElementById('dashboard-global-search');
+    if (!input || !input.value.trim()) return;
+    
+    document.querySelector('[data-tab="tab-library"]').click();
+    
+    const libSearch = document.getElementById('library-search');
+    if (libSearch) {
+        libSearch.value = input.value;
+        filterLibrary();
+    }
+}
+
+async function refreshDashboardData(force = false) {
     if (!window.pywebview || !window.pywebview.api) return;
     
-    // Only fetch if the tab is visible
-    const diagTab = document.getElementById('tab-diagnostics');
-    if (!diagTab || !diagTab.classList.contains('active')) return;
+    // 1. Stats (Today)
+    window.pywebview.api.get_stats('today').then(stats => {
+        if (!stats) return;
+        document.getElementById('summary-today-time').textContent = formatTimeStr(stats.total_watch_time || 0);
+        document.getElementById('summary-today-eps').textContent = `${stats.unique_episodes || 0} episodes`;
+    });
     
-    try {
-        const data = await window.pywebview.api.get_diagnostics();
-        if (!data || !data.components) return;
+    // 2. Diagnostics (Health & Recent Activity)
+    window.pywebview.api.get_diagnostics().then(diag => {
+        if (!diag) return;
         
-        lastDiagnosticsState = data;
-        renderDiagnosticsGrid(data.components);
-        renderDiagnosticsTimeline(data.timeline);
-        renderDiagnosticsErrors(data.errors);
-    } catch (e) {
-        console.error("Failed to fetch diagnostics:", e);
-    }
-}
-
-function formatRelativeTime(timestamp) {
-    if (!timestamp) return "Never";
-    const seconds = Math.floor(Date.now() / 1000 - timestamp);
-    if (seconds < 60) return "Just now";
-    if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
-    if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
-    return Math.floor(seconds / 86400) + "d ago";
-}
-
-function formatTime(timestamp) {
-    const d = new Date(timestamp * 1000);
-    return d.toTimeString().split(' ')[0]; // HH:MM:SS
-}
-
-function renderDiagnosticsGrid(components) {
-    const grid = document.getElementById('diagnostics-components-grid');
-    if (!grid) return;
-    
-    let html = '';
-    
-    const icons = {
-        'vlc': 'fa-play-circle',
-        'discord': 'fa-discord',
-        'anilist': 'fa-list',
-        'metadata': 'fa-tags',
-        'gemini': 'fa-brain',
-        'cache': 'fa-database',
-        'artwork': 'fa-image',
-        'database': 'fa-server'
-    };
-    
-    const displayNames = {
-        'vlc': 'VLC Media Player',
-        'discord': 'Discord RPC',
-        'anilist': 'AniList Sync',
-        'metadata': 'Metadata Engine',
-        'gemini': 'Gemini AI',
-        'cache': 'Local Cache',
-        'artwork': 'Artwork Provider',
-        'database': 'History Database'
-    };
-    
-    for (const [key, comp] of Object.entries(components)) {
-        const icon = icons[key] || 'fa-microchip';
-        const name = displayNames[key] || key;
-        
-        let pendingHtml = '';
-        if (comp.pending > 0) {
-            pendingHtml = `<div style="margin-top: 8px; font-size: 0.75rem; color: var(--color-primary);"><i class="fas fa-spinner fa-spin"></i> ${comp.pending} pending operations</div>`;
+        let total = 0; let healthy = 0;
+        let degraded = 0; let error = 0;
+        for (const [key, comp] of Object.entries(diag.components || {})) {
+            total++;
+            if (comp.state === 'HEALTHY') healthy++;
+            else if (comp.state === 'DEGRADED') degraded++;
+            else if (comp.state === 'ERROR') error++;
         }
         
-        html += `
-            <div class="diagnostics-card">
-                <div class="diag-header">
-                    <span><i class="fas ${icon} fa-fw" style="margin-right: 6px; color: var(--text-secondary);"></i> ${name}</span>
-                    <span class="diag-status ${comp.state}">
-                        <div class="dot" style="background: currentColor; width: 6px; height: 6px; margin:0; animation:none;"></div>
-                        ${comp.state}
-                    </span>
-                </div>
-                <div class="diag-details">
-                    <div>Last Success: <span style="color: var(--text-primary);">${formatRelativeTime(comp.last_success)}</span></div>
-                    ${comp.last_failure ? `<div>Last Error: <span style="color: #ff5c5c;">${formatRelativeTime(comp.last_failure)}</span></div>` : ''}
-                    <div class="diag-event" title="${comp.last_event}">${comp.last_event || 'No events yet'}</div>
-                </div>
-                ${pendingHtml}
-            </div>
-        `;
-    }
-    
-    grid.innerHTML = html;
-}
+        let score = 100;
+        if (total > 0) score = Math.round((healthy / total) * 100);
+        
+        const healthScoreEl = document.getElementById('summary-health-score');
+        const healthDetailsEl = document.getElementById('summary-health-details');
+        healthScoreEl.textContent = `${score}%`;
+        
+        if (score === 100) {
+            healthScoreEl.style.color = 'var(--color-success)';
+            healthDetailsEl.textContent = 'All systems online';
+        } else if (error > 0) {
+            healthScoreEl.style.color = '#ef4444';
+            healthDetailsEl.textContent = `${error} system(s) in error`;
+        } else {
+            healthScoreEl.style.color = '#f59e0b';
+            healthDetailsEl.textContent = `${degraded} system(s) degraded`;
+        }
+        
+        const timelineEl = document.getElementById('dashboard-activity-list');
+        if (timelineEl && diag.timeline) {
+            const meaningfulTypes = ['system', 'anilist', 'library', 'metadata'];
+            let meaningful = diag.timeline.filter(e => {
+                const msg = (e.message || '').toLowerCase();
+                if (msg.includes('cache hit') || msg.includes('resolved') || msg.includes('deduplicated') || msg.includes('scan completed') || msg.includes('scan error') || msg.includes('self-test') || msg.includes('background task')) return false;
+                if (e.component === 'anilist' && (msg.includes('synced') || msg.includes('rewatch'))) return true;
+                if (e.component === 'system' && (msg.includes('watching') || msg.includes('started') || msg.includes('changed') || msg.includes('completed'))) return true;
+                if (msg.includes('error') || msg.includes('failed') || msg.includes('warning') || msg.includes('recovery')) return true;
+                return false;
+            }).reverse().slice(0, 10);
+            
+            if (meaningful.length === 0) {
+                timelineEl.innerHTML = '<p class="empty-state">No recent activity.</p>';
+            } else {
+                timelineEl.innerHTML = meaningful.map(e => `
+                    <div class="activity-item">
+                        <span class="time">${new Date(e.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                        <span class="msg">${e.message}</span>
+                    </div>
+                `).join('');
+            }
+        }
+    });
 
-function renderDiagnosticsTimeline(timeline) {
-    const container = document.getElementById('diagnostics-timeline');
-    if (!container) return;
-    
-    if (!timeline || timeline.length === 0) {
-        container.innerHTML = '<div style="color: var(--text-secondary); font-style: italic;">No events recorded yet.</div>';
-        return;
-    }
-    
-    // Sort descending
-    const sorted = [...timeline].sort((a, b) => b.timestamp - a.timestamp);
-    
-    let html = '';
-    for (const event of sorted) {
-        html += `
-            <div class="timeline-item">
-                <div class="timeline-time">${formatTime(event.timestamp)} <span style="opacity:0.5; margin-left: 4px;">[${event.component}]</span></div>
-                <div>${event.message}</div>
-            </div>
-        `;
-    }
-    
-    container.innerHTML = html;
-}
+    // 3. AniList Sync Status
+    window.pywebview.api.get_anilist_sync_status().then(sync => {
+        if (!sync) return;
+        const stateEl = document.getElementById('summary-sync-state');
+        if(stateEl) {
+            stateEl.textContent = sync.state;
+            stateEl.style.color = sync.state === 'HEALTHY' ? 'var(--color-success)' : '#ef4444';
+        }
+        
+        let pendingText = sync.queue_size === 0 ? 'All synced' : `${sync.queue_size} pending`;
+        const detailsEl = document.getElementById('summary-sync-details');
+        if(detailsEl) detailsEl.textContent = pendingText;
+        
+        const actionBanner = document.getElementById('dashboard-action-required');
+        const actionMsg = document.getElementById('dashboard-action-msg');
+        if (sync.state === 'ERROR' && actionBanner && actionMsg) {
+            actionBanner.style.display = 'flex';
+            let errMsg = sync.last_logs[sync.last_logs.length-1] || 'Unknown error';
+            errMsg = errMsg.replace(/\\[AniList\\]/g, '').replace(/\\[Error\\]/g, '').trim();
+            actionMsg.textContent = 'AniList Sync Error: ' + errMsg;
+        } else if (actionBanner) {
+            actionBanner.style.display = 'none';
+        }
+    });
 
-function renderDiagnosticsErrors(errors) {
-    const container = document.getElementById('diagnostics-errors');
-    if (!container) return;
+    // 4. Continue Watching
+    window.pywebview.api.get_history().then(res => {
+        const rail = document.getElementById('dashboard-continue-rail');
+        if (!rail) return;
+        if (!res || !res.history || res.history.length === 0) {
+            rail.innerHTML = '<p class="empty-state">No recent activity.</p>';
+            return;
+        }
+        
+        const seen = new Set();
+        const unique = [];
+        for (let item of res.history) {
+            let title = item.cleaned_title || item.title;
+            if (!seen.has(title)) {
+                seen.add(title);
+                unique.push(item);
+            }
+            if (unique.length >= 10) break;
+        }
+        
+        rail.innerHTML = unique.map(item => `
+            <div class="history-card" onclick="document.querySelector('[data-tab=\\'tab-library\\']').click()">
+                <div class="history-cover">
+                    <img src="${item.cover_url || COVER_PLACEHOLDER}" onerror="this.src='${COVER_PLACEHOLDER}'">
+                </div>
+                <div class="history-info">
+                    <div class="history-title" title="${item.title}">${item.cleaned_title || item.title}</div>
+                    <div class="history-meta">${item.episode_str || 'Movie'}</div>
+                </div>
+            </div>
+        `).join('');
+    });
     
-    if (!errors || errors.length === 0) {
-        container.innerHTML = '<div style="color: #34d399; font-style: italic;"><i class="fas fa-check-circle"></i> No errors recorded.</div>';
-        return;
-    }
-    
-    let html = '';
-    for (const err of errors) {
-        const countBadge = err.count > 1 ? `<span class="error-count">${err.count}x</span>` : '';
-        html += `
-            <div class="error-item">
-                <div class="error-header">
-                    <span class="error-type">[${err.component.toUpperCase()}] ${err.type}</span>
-                    <div style="display:flex; gap: 8px; align-items:center;">
-                        ${countBadge}
-                        <span style="font-size: 0.7rem; color: var(--text-secondary);">${formatRelativeTime(err.last_seen)}</span>
+    // 5. Airing Soon
+    window.pywebview.api.get_airing_schedule().then(res => {
+        const rail = document.getElementById('dashboard-airing-rail');
+        const offlineBadge = document.getElementById('airing-offline-badge');
+        if (!rail) return;
+        
+        if (!res || res.error) {
+            rail.innerHTML = `<p class="empty-state">Failed to load schedule.</p>`;
+            if (offlineBadge) offlineBadge.style.display = 'none';
+            return;
+        }
+        
+        if (res.status === 'offline' && offlineBadge) offlineBadge.style.display = 'inline';
+        else if (offlineBadge) offlineBadge.style.display = 'none';
+        
+        if (!res.items || res.items.length === 0) {
+            rail.innerHTML = '<p class="empty-state">No upcoming episodes for current shows.</p>';
+            return;
+        }
+        
+        rail.innerHTML = res.items.map(item => {
+            const timeUntil = item.nextAiringEpisode.timeUntilAiring;
+            let timeStr = "";
+            if (timeUntil < 86400) {
+                const hrs = Math.floor(timeUntil / 3600);
+                timeStr = hrs > 0 ? `In ${hrs}h` : 'Soon';
+            } else {
+                const days = Math.floor(timeUntil / 86400);
+                timeStr = `In ${days}d`;
+            }
+            
+            return `
+            <div class="history-card">
+                <div class="history-cover">
+                    <img src="${item.coverImage.medium || COVER_PLACEHOLDER}" onerror="this.src='${COVER_PLACEHOLDER}'">
+                    <div class="history-progress">
+                        <div class="progress-fill" style="width: 100%; background: var(--accent-blurple)"></div>
                     </div>
                 </div>
-                <div style="color: var(--text-primary); margin-bottom: 4px;">${err.message}</div>
-                ${err.traceback ? `<details style="margin-top: 8px;"><summary style="cursor:pointer; color: var(--text-secondary); font-size: 0.75rem;">Show Stack Trace</summary><pre style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; overflow-x: auto; font-size: 0.7rem; margin-top: 4px; color: #a1a1aa;">${err.traceback}</pre></details>` : ''}
+                <div class="history-info">
+                    <div class="history-title" title="${item.title.romaji}">${item.title.romaji}</div>
+                    <div class="history-meta" style="color:var(--accent-blurple);">Ep ${item.nextAiringEpisode.episode} • ${timeStr}</div>
+                </div>
             </div>
-        `;
-    }
-    
-    container.innerHTML = html;
+            `;
+        }).join('');
+    });
 }
 
-async function runDiagnostics() {
-    const btn = document.getElementById('btn-run-diagnostics');
-    if (btn) {
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running...';
-        btn.disabled = true;
-    }
-    
-    try {
-        await window.pywebview.api.run_diagnostics();
-        // Wait a few seconds for background tests to finish before allowing it again
-        setTimeout(() => {
-            if (btn) {
-                btn.innerHTML = '<i class="fas fa-stethoscope"></i> Run Diagnostics';
-                btn.disabled = false;
-            }
-            updateDiagnostics();
-        }, 3000);
-    } catch (e) {
-        console.error(e);
-        if (btn) {
-            btn.innerHTML = '<i class="fas fa-stethoscope"></i> Run Diagnostics';
-            btn.disabled = false;
-        }
-    }
+function formatTimeStr(seconds) {
+    if (seconds < 60) return `${Math.floor(seconds)}s`;
+    let hrs = Math.floor(seconds / 3600);
+    let mins = Math.floor((seconds % 3600) / 60);
+    if (hrs > 0) return `${hrs}h ${mins}m`;
+    return `${mins}m`;
 }
 
-async function exportDiagnostics() {
-    const btn = document.getElementById('btn-export-diagnostics');
-    if (btn) {
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Exporting...';
-        btn.disabled = true;
+setInterval(() => {
+    const tab = document.getElementById('tab-dashboard');
+    if (tab && tab.classList.contains('active')) {
+        refreshDashboardData(false);
     }
-    
-    try {
-        const filepath = await window.pywebview.api.export_diagnostics();
-        if (filepath) {
-            addLog(`Diagnostics exported to ${filepath}`);
-            // Also show a toast if available
-            if (window.showToast) {
-                window.showToast('Diagnostics Exported', `Saved to ${filepath}`, 'success');
-            }
-        }
-    } catch (e) {
-        console.error(e);
-    } finally {
-        if (btn) {
-            btn.innerHTML = '<i class="fas fa-download"></i> Export Diagnostics';
-            btn.disabled = false;
-        }
-    }
-}
+}, 30000);
 
-// Ensure updateDiagnostics runs periodically when the tab is open
-setInterval(updateDiagnostics, 1000);
+document.addEventListener('pywebviewready', () => {
+    setTimeout(() => refreshDashboardData(true), 1500);
+});
+"""
 
-""")
+with open("web/script.js", "a", encoding="utf-8") as f:
+    f.write(js_code)
