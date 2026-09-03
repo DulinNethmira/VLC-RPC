@@ -57,28 +57,25 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v5.7.6"
+    tag_name = "v6.0.0"
     
-    release_title = "✨ v5.7.6 - Premium UI & Smart Grouping!"
-    release_notes = """### 🚀 What's New in v5.7.6!
+    release_title = "✨ v6.0.0 - Production Metadata Engine"
+    release_notes = """### 🚀 What's New in v6.0.0!
 
-We've completely overhauled the Local Media Library UI to give you a true anime streaming experience!
+We've completely overhauled how VLC RPC handles media metadata to make it faster, safer, and much more accurate.
 
-#### 🎨 Premium Anime Streaming UI
-- **Redesigned Cards**: The media cards now match the aesthetics of Netflix and Crunchyroll with edge-to-edge posters.
-- **Dynamic Interactions**: Added sleek hover-to-play overlays and micro-animations for better user engagement.
-- **Readable Titles**: Anime titles now wrap up to 2 lines instead of cutting off early!
+#### 🧠 Production Metadata Engine
+- **Centralized Pipeline**: All metadata parsing is now handled by a dedicated engine.
+- **Dual-Key Caching**: Renaming or moving your files no longer breaks your cached metadata!
+- **Negative Caching**: The app will no longer spam APIs for unrecognized files.
+- **Deduplicated Background Resolution**: Skipping rapidly through a season won't launch dozens of identical requests.
 
-#### 🧠 Smart Season Grouping
-- Say goodbye to cluttered grids! The library scanner now utilizes a much smarter grouping algorithm. 
-- Episodes of the same season (e.g. *Re:ZERO Season 4*) will now correctly group into a single clean series card using AniList IDs.
+#### 🔧 Fixes & Tweaks
+- Fully eliminated race conditions where older metadata requests could overwrite newer ones.
+- Built-in crash resilience using atomic file writes for `metadata_cache.json`.
+- Legacy cache files are automatically upgraded to the new rich format on load.
 
-#### 🔧 Backend Enhancements
-- **Auto-Scan on Launch**: The library now automatically checks for new downloaded episodes in the background the moment you open the app!
-- **Poster Downloads**: Added a background worker that fetches official AniList covers for newly scanned anime if they are missing from your cache.
-- **Playback Error Fix**: Replaced the ugly HTTP timeout error with a friendly reminder if you attempt to play a file while VLC is closed.
-
-Enjoy the sleek new library experience! 🎉"""
+Enjoy the new update! 🎉"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)
