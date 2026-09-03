@@ -74,7 +74,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.9.4"
+CURRENT_VERSION = "5.9.5"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -1056,7 +1056,7 @@ class RPCBackend:
         threading.Thread(target=self._telemetry_worker, daemon=True).start()
 
         self.library_scanner = LocalLibraryScanner(self)
-
+        self.library_scanner.scan()
 
     def _get_installation_id(self):
         """Get or create a persistent installation UUID from config."""
@@ -1486,7 +1486,11 @@ class RPCBackend:
             pass
 
 
-
+    def _flush_watch_history(self):
+        if hasattr(self, 'current_watch_duration') and self.current_watch_duration > 0:
+            if hasattr(self, 'last_watched_title_raw') and hasattr(self, 'last_watched_title'):
+                self.add_to_history(self.last_watched_title, getattr(self, 'last_watched_ep', ''), getattr(self, 'last_watched_music', False), self.current_watch_duration)
+            self.current_watch_duration = 0
 
 
     def send_webhook_log(self, message):
@@ -5438,15 +5442,7 @@ class RPCBackend:
 
 
                         if hasattr(self, 'last_watched_title_raw') and self.last_watched_title_raw != self.state_data['title']:
-
-
-                            self.add_to_history(self.last_watched_title, self.last_watched_ep, self.last_watched_music, self.current_watch_duration)
-
-
-                            self.current_watch_duration = 0
-
-
-
+                            self._flush_watch_history()
 
 
                         if getattr(self, 'last_watched_title', None) == cleaned_title:
@@ -5579,6 +5575,7 @@ class RPCBackend:
                 else:
 
 
+                    self._flush_watch_history()
                     self.state_data["vlc_connected"] = False
                     if getattr(self, "diagnostics", None):
                         self.diagnostics.set_state("vlc", "OFFLINE", "VLC disconnected")
@@ -5629,6 +5626,7 @@ class RPCBackend:
                 # VLC is unreachable — mark disconnected and hibernate briefly
 
 
+                self._flush_watch_history()
                 self.state_data["vlc_connected"] = False
                 if getattr(self, "diagnostics", None):
                     self.diagnostics.set_state("vlc", "OFFLINE", "VLC unreachable")
@@ -5685,6 +5683,7 @@ class RPCBackend:
                         self.diagnostics.report_error("vlc", "VLCError", str(e), exc_info=sys.exc_info())
 
 
+                self._flush_watch_history()
                 self.state_data["vlc_connected"] = False
                 if getattr(self, "diagnostics", None):
                     self.diagnostics.set_state("vlc", "OFFLINE", "VLC polling error")
@@ -7159,6 +7158,18 @@ class LocalLibraryScanner(threading.Thread):
                                 
                         parsed = clean_title(file)
                         title = parsed.get("title", "")
+                        
+                        # Use top-level parent folder as series title if present
+                        try:
+                            rel_path = os.path.relpath(abs_path, folder)
+                            parts = rel_path.split(os.sep)
+                            if len(parts) > 1:
+                                folder_title = parts[0].strip()
+                                if folder_title:
+                                    title = folder_title
+                        except Exception:
+                            pass
+                            
                         ep_val = parsed.get("episode")
                         episode_str = f"Episode {ep_val}" if ep_val else ""
                         season = parsed.get("season")
