@@ -527,7 +527,13 @@
                             <select id="theme_selector" onchange="applyTheme(this.value)">
                                 <option value="#5865F2">Discord Blurple</option>
                                 <option value="#f43f5e">Ruby Red</option>
+                                <option value="#10b981">Emerald Green</option>
+                                <option value="#8b5cf6">Neon Purple</option>
+                                <option value="#f59e0b">Sunset Orange</option>
+                                <option value="#ec4899">Hot Pink</option>
+                                <option value="#06b6d4">Cyan Blue</option>
                             </select>
+                            <span class="hint">Change the core accent color of the application.</span>
                         </div>
                     </div>
                     
@@ -536,16 +542,7 @@
                         <div class="input-group">
                             <label>Dashboard Scale (<span id="scale-val-label">100%</span>)</label>
                             <input type="range" id="dashboard_scale" min="0.7" max="1.3" step="0.05" value="1.0" oninput="document.getElementById('scale-val-label').textContent = Math.round(this.value * 100) + '%'; applyDashboardScale(this.value);">
-                            <small>Adjusts the visual size of the dashboard without affecting other tabs.</small>
-                        </div>
-                    </div>
-                                <option value="#10b981">Emerald Green</option>
-                                <option value="#8b5cf6">Neon Purple</option>
-                                <option value="#f59e0b">Sunset Orange</option>
-                                <option value="#ec4899">Hot Pink</option>
-                                <option value="#06b6d4">Cyan Blue</option>
-                            </select>
-                            <span class="hint">Change the core accent color of the application.</span>
+                            <small class="hint">Adjusts the visual size of the dashboard without affecting other tabs.</small>
                         </div>
                     </div>
 

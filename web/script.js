@@ -1770,6 +1770,9 @@ function applyDashboardScale(scale) {
         let val = parseFloat(scale);
         if(isNaN(val) || val < 0.7) val = 0.7;
         if(val > 1.3) val = 1.3;
-        wrapper.style.zoom = val;
+        wrapper.style.transform = `scale(${val})`;
+        wrapper.style.transformOrigin = "top left";
+        wrapper.style.width = `${100 / val}%`;
+        wrapper.style.height = `${100 / val}%`;
     }
 }

@@ -57,23 +57,17 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v6.1.0"
-    release_title = "\u2728 v6.1.0 - Massive Dashboard Redesign!"
-    release_notes = """### \U0001f680 What's New in v6.1.0!
+    tag_name = "v6.1.1"
+    release_title = "\u2728 v6.1.1 - Dashboard Layout Hotfixes"
+    release_notes = """### \U0001f680 What's New in v6.1.1!
 
-We've completely overhauled the VLC RPC Dashboard to give you a true command center experience. 
+This is a hotfix release to address critical layout issues introduced in v6.1.0.
 
-#### 🎨 Brand New Dashboard Layout
-- **Hero Display**: Now features the active Anime Sync Status directly on the cover art.
-- **Summary Cards**: Quick stats for Today's watch time, AniList Sync Queue, and System Health.
-- **Airing Soon**: Never miss an episode! The dashboard now fetches and caches the next airing times for the anime you're currently watching.
-- **Smart Activity Feed**: We filtered out the technical noise so you only see what matters (started watching, finished episode, synced).
+#### 🔧 Fixes & Tweaks
+- **Settings Layout Bug**: Fixed a malformed DOM structure that caused the Settings page components to bleed over into the Library, History, and Dashboard tabs.
+- **Dashboard Scale Compatibility**: Swapped out CSS zoom scaling for a highly compatible CSS transform-based engine. Scaling out (e.g. 70%) now correctly fits the dashboard into your viewport without clipping!
 
-#### 🔍 Quality of Life
-- **Dashboard Scale**: Added a new zoom slider in Settings (70% - 130%) so you can size the dashboard perfectly without affecting other tabs.
-- **Action Required Banner**: Instantly know when something goes wrong with AniList syncs or system health.
-
-Enjoy the new look! 🎉
+Enjoy the polished command center! 🎉
 """
 
     try:
