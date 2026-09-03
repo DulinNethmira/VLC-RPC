@@ -13,6 +13,7 @@ import traceback
 from notification_manager import NotificationManager, NotificationPriority, NotificationStatus
 import queue
 import re
+from metadata_engine import MetadataEngine
 import urllib.parse
 import hashlib
 import unicodedata
@@ -74,7 +75,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.9.8"
+CURRENT_VERSION = "5.10.0"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -109,8 +110,7 @@ DEFAULT_CONFIG = {
     "cloud_api_url": "https://vlc-rpc-cloud.onrender.com"
 }
 def query_gemini_title(filename, api_key):
-    """Use Gemini REST API to get the exact official anime/media title and episode."""
-    if not api_key: return None
+    return None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
     
     prompt = """
@@ -242,107 +242,25 @@ def media_identity_to_display(identity):
 
     return title, episode_str, media_type
 def clean_title(title):
-    """Parse a raw filename into structured media identity data."""
-    import re
-    import guessit
-    title = str(title or "")
-    title = re.sub(r'^\d+[\.\-]\s+', '', title)
-    title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
-    title = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
-    
-    def _bracket_to_subtitle(m):
-        c = m.group(1).strip()
-        if ' ' not in c and "'" not in c and re.match(r'^[\w\-\.]+$', c):
-            return m.group(0)
-        return ': ' + c
-    title = re.sub(r'\[([^\]]+)\]', _bracket_to_subtitle, title)
-
-    title = re.sub(r'([a-z])([A-Z])', r'\1 \2', title)
-    title = title.replace(';', ':')
-
-    def _smart_cap(w):
-        if not w: return w
-        if w.isupper() and len(w) <= 5: return w
-        def cap_part(p):
-            if not p: return p
-            if any(c.isupper() for c in p[1:]): return p
-            return p.capitalize()
-        return '-'.join(cap_part(p) for p in w.split('-'))
-
-    def _apply_smart_cap(t):
-        if not t: return t
-        return ' '.join(_smart_cap(w) for w in str(t).split())
-
-    result = {
-        "title": title,
-        "base_title": "",
-        "season": None,
-        "episode": None,
-        "media_type": ""
-    }
-
-    loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\.\-:&!,]+?)[\s\._]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
-    explicit_ep = re.search(r'\b(?:Episode|Ep|E)\s*\d{1,4}\s*$', title, re.I)
-    
-    raw_title_for_guessit = title
-    if loose_ep:
-        ep_num = int(loose_ep.group(2))
-        if explicit_ep or not (1900 <= ep_num <= 2099):
-            raw_title = re.sub(r'[\._ ]+', ' ', loose_ep.group(1)).strip()
-            raw_title = re.sub(r'[\s\-]+$', '', raw_title).strip()
-            result["episode"] = ep_num
-            raw_title_for_guessit = raw_title
-
+    """Parse a raw filename into structured media identity data (now using MetadataEngine)."""
     try:
-        guessed = guessit.guessit(raw_title_for_guessit)
-        cleaned = guessed.get('title', raw_title_for_guessit)
-        media_type = guessed.get('type', '')
-
-        if media_type == 'movie':
-            year = guessed.get('year')
-            if year:
-                cleaned = f"{cleaned} ({year})"
-        
-        release_group = guessed.get('release_group')
-        if release_group and isinstance(release_group, str):
-            rg = release_group.strip()
-            if ("'" in rg or " " in rg) and len(rg) > 3 and cleaned and rg.lower() not in cleaned.lower():
-                cleaned = cleaned + ": " + rg
-                
-        alt_title = guessed.get('alternative_title')
-        if alt_title:
-            if isinstance(alt_title, list):
-                alt_title = ' '.join(alt_title)
-            if isinstance(alt_title, str) and cleaned:
-                at = alt_title.strip()
-                if at and at.lower() not in cleaned.lower():
-                    cleaned = cleaned + " " + at
-                
-        cleaned = _apply_smart_cap(cleaned)
-        
-        season = guessed.get('season')
-        episode = guessed.get('episode')
-        
-        if isinstance(season, list): season = season[0]
-        if isinstance(episode, list): episode = episode[0]
-        
-        result["title"] = cleaned
-        if season: result["season"] = season
-        
-        if episode is not None:
-            if result["episode"] is not None:
-                if str(season) + str(episode) == str(result["episode"]):
-                    result["season"] = None
-                else:
-                    result["episode"] = episode
-            else:
-                result["episode"] = episode
-                
-        result["media_type"] = media_type if media_type else ""
-    except Exception as e:
-        pass
-
-    return result
+        from metadata_engine import MetadataEngine
+        ident = MetadataEngine.parse_filename(title)
+        return {
+            "title": ident.title,
+            "base_title": ident.base_title,
+            "season": ident.season,
+            "episode": ident.episode,
+            "media_type": ident.media_type
+        }
+    except Exception:
+        return {
+            "title": title,
+            "base_title": "",
+            "season": None,
+            "episode": None,
+            "media_type": ""
+        }
 def is_music_file(filename, artist, album):
 
 
@@ -852,6 +770,7 @@ class RPCBackend:
             cache_dir = os.path.join(os.path.dirname(sys.executable), "art_cache")
             
         self.artwork_engine = ArtworkEngine(cache_dir, self.config, _ArtLogger(self))
+        self.metadata_engine = MetadataEngine(diagnostics_manager=self.diagnostics, config=self.config)
 
         self.metadata_cache = {}
 
@@ -4442,416 +4361,74 @@ class RPCBackend:
         return ""
 
     def _fetch_metadata_bg(self, cache_key, cleaned_title, episode_str, is_music, artist, input_uri="", media_type_hint="", generation=None):
-        """Fetch metadata in a background thread so the main loop stays fast.
-
-        ``generation`` is the media_generation value captured when the thread
-        was spawned.  If the counter has advanced by the time results arrive
-        the worker exits silently, preventing old metadata overwriting new.
-        """
+        """Fetch metadata using the centralized MetadataEngine."""
         if generation is not None and generation != self.media_generation:
-            return  # Stale – a newer file is already being processed
-
-        try:
-
-
-            season_num = None
-
-
-            episode_num = None
-
-
-            # Use passed media_type to avoid race with state_data being updated for a new file
-
-
-            media_type = media_type_hint or self.state_data.get("media_type", "movie")
-
-
-
-
-
-            se_parsed = re.search(r'Season\s+(\d+)\s+Episode\s+(\d+)', episode_str)
-
-
-            if se_parsed:
-
-
-                season_num = int(se_parsed.group(1))
-
-
-                episode_num = int(se_parsed.group(2))
-
-
-            else:
-
-
-                ep_parsed = re.search(r'Episode\s+(\d+)', episode_str)
-
-
-                if ep_parsed:
-
-
-                    episode_num = int(ep_parsed.group(1))
-
-
-
-
-
-            year_match = re.search(r'\((\d{4})\)', episode_str)
-
-
-            year = year_match.group(1) if year_match else None
-
-
-
-
-
-            search_title = re.sub(r'\b(19|20)\d{2}\b', '', cleaned_title)
-
-
-            search_title = re.sub(r'[\(\)]', '', search_title).strip()
-
-
-            search_title = re.sub(r'\bSeason\s+\d+\b', '', search_title, flags=re.IGNORECASE).strip()
-
-
-            search_title = re.sub(r'\s{2,}', ' ', search_title).strip()
-
-
-
-
-
-            self.log(f"[Metadata] Fetching '{search_title}' type={media_type} S{season_num}E{episode_num}")
-
-
-
-
-
-            def prepared(candidate):
-
-
-                return self.prepare_metadata_cover(candidate)
-
-
-
-
-
-            metadata = None
-
-
-            # Try ALL sources in priority order. AniList is now universal fallback
-
-
-            # because many anime are misclassified as tv_show/movie.
-
-
-            if media_type == "music":
-
-
-                metadata = prepared(self.fetch_itunes_metadata(search_title, artist))
-
-
-
-
-
-            elif media_type == "movie":
-
-
-                metadata = prepared(self.fetch_omdb_metadata(search_title, year))
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    metadata = prepared(self.fetch_anilist_metadata(search_title))
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    metadata = prepared(self.fetch_jikan_metadata(search_title))
-
-
-
-
-
-            elif media_type == "anime":
-
-
-                # AniList: best English title matching + season-aware
-
-
-                if season_num and season_num > 1:
-
-
-                    ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
-
-
-                    suffix = ordinals.get(season_num, f"{season_num}th")
-
-
-                    metadata = prepared(self.fetch_anilist_metadata(f"{search_title} {suffix} Season"))
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    metadata = prepared(self.fetch_anilist_metadata(search_title))
-
-
-                # Jikan fallback
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    if season_num and season_num > 1:
-
-
-                        ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
-
-
-                        suffix = ordinals.get(season_num, f"{season_num}th")
-
-
-                        metadata = prepared(self.fetch_jikan_metadata(f"{search_title} {suffix} Season"))
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    metadata = prepared(self.fetch_jikan_metadata(search_title))
-
-
-                # Supplement rating from OMDb if missing
-
-
-                if metadata and not metadata.get("rating"):
-
-
-                    omdb = self.fetch_omdb_metadata(search_title, year)
-
-
-                    if omdb and omdb.get("rating"):
-
-
-                        metadata["rating"] = omdb["rating"]
-
-
-
-
-
-            elif media_type == "tv_show":
-
-
-                metadata = prepared(self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num))
-
-
-                
-
-
-                # If TVMaze found it but it's classified as Anime/Animation, 
-
-
-                # AniList usually has vastly superior covers, genres, and ratings.
-
-
-                if metadata and any(g.lower() in ("anime", "animation") for g in metadata.get("genres", [])):
-
-
-                    anilist_meta = prepared(self.fetch_anilist_metadata(search_title))
-
-
-                    if anilist_meta and anilist_meta.get("image_url"):
-
-
-                        metadata = anilist_meta
-
-
-
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    metadata = prepared(self.fetch_omdb_metadata(search_title, year))
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    metadata = prepared(self.fetch_anilist_metadata(search_title))
-
-
-                if not metadata or not metadata.get("image_url"):
-
-
-                    metadata = prepared(self.fetch_jikan_metadata(search_title))
-
-
-
-
-
-            if not metadata or not metadata.get("image_url"):
-
-
-                metadata = prepared(self.fetch_wikipedia_metadata(search_title))
-
-
-
-
-
-            if metadata and metadata.get("image_url"):
-
-
-                self.log(f"[Metadata] OK Cover found for '{search_title}'")
-
-
-            else:
-
-
-                self.log(f"[Metadata] NO Cover found for '{search_title}'")
-
-
-
-
-
-            if metadata:
-
-
-                try:
-
-
-                    if metadata.get("image_url"):
-
-
-                        color = self.get_dominant_color(metadata["image_url"])
-
-
-                        if color:
-
-
-                            metadata["dominant_color"] = color
-
-
-                except Exception:
-
-
-                    pass
-
-
-                self.metadata_cache[cache_key] = metadata
-
-
-                if metadata.get("image_url"):
-                    self.save_metadata_cache()
-
-
-
-
-
-            # Only apply metadata if the user is still on the same file.
-
-
-            # Use input_uri (the file path) rather than rebuilding current_key from
-
-
-            # volatile state — this prevents the race where track_key has moved on
-
-
-            # but input_uri hasn't changed (same file, title just got resolved by Gemini).
-
-
-            # Discard if generation advanced (new file) OR the file URL changed.
-            stale_gen = (generation is not None and generation != self.media_generation)
+            return  # Stale
+
+        # Note: input_uri is passed as file_path
+        def on_complete(result, req_generation):
+            if req_generation != self.media_generation:
+                return
+            
+            # File identity check
             still_same_file = (
-
-
-                not input_uri  # backwards compat: old calls without input_uri always apply
-
-
+                not input_uri
                 or self.state_data.get("_last_art_key", "") == input_uri
-
-
                 or self.state_data.get("_last_art_uri", "") == input_uri
-
-
             )
-            if stale_gen:
-                still_same_file = False
+            
+            if not still_same_file:
+                self.log(f"[Metadata] Discarded stale metadata (file changed)")
+                return
 
-
-            if still_same_file:
-
-
+            if result.confidence > 0:
+                # Update state
+                metadata = result.to_dict()
+                
+                # Maintain legacy keys for UI/ArtworkEngine compatibility
+                if result.image_url:
+                    color = self.get_dominant_color(result.image_url)
+                    if color:
+                        metadata["dominant_color"] = color
+                
+                self.metadata_cache[cache_key] = metadata
+                if result.image_url:
+                    self.save_metadata_cache()
+                    
                 self.state_data["metadata"] = metadata
-
-
-                # Trigger background artwork resolution for the new provider metadata URL
-                if metadata and metadata.get("image_url"):
-                    self.artwork_engine.resolve_artwork_bg(input_uri, {}, metadata.get("image_url"))
+                
+                if result.image_url:
+                    self.artwork_engine.resolve_artwork_bg(input_uri, {}, result.image_url)
                 
                 self.state_data["status_message"] = "Metadata loaded successfully."
-
-
-                # ── Official title override ───────────────────────────────────────
-
-
-                # Every metadata source (AniList, OMDb, TVMaze, Jikan) now returns
-
-
-                # an "official_title" field with the authoritative database name.
-
-
-                # We override the display title with it so regardless of how the
-
-
-                # user named their file, the UI always shows the correct title.
-
-
-                if metadata:
-
-
-                    official = metadata.get("official_title")
-
-
-                    if official and isinstance(official, str) and official.strip():
-
-
-                        self.state_data["cleaned_title"] = official.strip()
-
-
-                        self.log(f"[Metadata] Title resolved: '{cleaned_title}' → '{official.strip()}'")
-
-
+                
+                # Official title override
+                official = metadata.get("official_title") or result.identity.title
+                if official and isinstance(official, str) and official.strip():
+                    self.state_data["cleaned_title"] = official.strip()
+                    self.log(f"[Metadata] Title resolved: '{cleaned_title}' -> '{official.strip()}'")
+                
                 self.log(f"[Metadata] Applied metadata for '{self.state_data.get('cleaned_title', cleaned_title)}'")
-
-
-
-
-
             else:
+                self.state_data["status_message"] = "Metadata unresolved."
+                self.log(f"[Metadata] NO Cover found for '{cleaned_title}'")
 
-
-                self.log(f"[Metadata] Discarded stale metadata (file changed)")
-
-
+        try:
+            self.metadata_engine.resolve_async(
+                file_path=input_uri,
+                raw_title=cleaned_title + (f" E{episode_str}" if episode_str and not is_music else ""),
+                media_type_hint="music" if is_music else media_type_hint,
+                artist=artist,
+                is_music=is_music,
+                generation=generation,
+                on_complete=on_complete
+            )
         except Exception as e:
-
-
             self.log(f"[Metadata] FETCH FAILED: {e}")
             if getattr(self, "diagnostics", None):
                 import sys
                 self.diagnostics.report_error("metadata", "FetchError", str(e), exc_info=sys.exc_info())
-
-
             self.state_data["status_message"] = f"Metadata fetch failed: {e}"
-
-
-
-
-
-
-
 
     def rpc_worker(self):
 
@@ -5219,7 +4796,8 @@ class RPCBackend:
                             def _run_gemini(name, key, gen):
                                 # Always clear pending in every terminal path.
                                 try:
-                                    t, e, mt = media_identity_to_display(query_gemini_title(name, key))
+                                    res = self.metadata_engine.query_gemini(name, key)
+                                    t, e, mt = media_identity_to_display(res)
                                 except Exception as _ge:
                                     self.gemini_cache[name] = None
                                     self.gemini_fail_times[name] = time.time()
@@ -6360,711 +5938,42 @@ class RPCBackend:
     # [metadata fetchers are omitted for brevity, keeping the same logic]
 
 
-    def fetch_itunes_metadata(self, title, artist):
-
-
-        try:
-
-
-            query = f"{title} {artist}"
-
-
-            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(query)}&media=music&limit=1"
-
-
-            r = requests.get(url, timeout=3)
-
-
-            if r.status_code == 200:
-
-
-                data = r.json()
-
-
-                results = data.get("results", [])
-
-
-                if results:
-
-
-                    track = results[0]
-
-
-                    img_url = track.get("artworkUrl100", "")
-
-
-                    if img_url:
-
-
-                        img_url = img_url.replace("100x100bb.jpg", "500x500bb.jpg")
-
-
-                    return {
-
-
-                        "image_url": img_url,
-
-
-                        "rating": None,
-
-
-                        "genres": [track.get("primaryGenreName")] if track.get("primaryGenreName") else [],
-
-
-                        "description": f"Music | {track.get('collectionName', '')}",
-
-
-                        "page_url": track.get("trackViewUrl") or track.get("collectionViewUrl")
-
-
-                    }
-
-
-        except Exception:
-
-
-            pass
-
-
+    def fetch_itunes_metadata(self, *args, **kwargs):
         return None
 
 
 
 
 
-    def fetch_tvmaze_metadata(self, title, season_num=None, episode_num=None):
-
-
-        try:
-
-
-            embed = "&embed=episodes" if (season_num is not None or episode_num is not None) else ""
-
-
-            url = f"https://api.tvmaze.com/singlesearch/shows?q={urllib.parse.quote(title)}{embed}"
-
-
-            r = requests.get(url, timeout=5)
-
-
-            if r.status_code == 200:
-
-
-                data = r.json()
-
-
-                img_url = None
-
-
-                if data.get("image"):
-
-
-                    img_url = data["image"].get("original") or data["image"].get("medium")
-
-
-                rating = None
-
-
-                if data.get("rating"):
-
-
-                    rating = data["rating"].get("average")
-
-
-                episode_rating = None
-
-
-                matched_ep = None
-
-
-                
-
-
-                if embed and data.get("_embedded", {}).get("episodes"):
-
-
-                    episodes = data["_embedded"]["episodes"]
-
-
-                    if season_num is not None and episode_num is not None:
-
-
-                        matched_ep = next((ep for ep in episodes if ep.get("season") == season_num and ep.get("number") == episode_num), None)
-
-
-                        if not matched_ep and episode_num <= len(episodes):
-
-
-                            matched_ep = episodes[episode_num - 1]
-
-
-                    elif episode_num is not None:
-
-
-                        matched_ep = next((ep for ep in episodes if ep.get("number") == episode_num), None)
-
-
-                        if not matched_ep and episode_num <= len(episodes):
-
-
-                            matched_ep = episodes[episode_num - 1]
-
-
-                    
-
-
-                    if matched_ep and matched_ep.get("rating"):
-
-
-                        episode_rating = matched_ep["rating"].get("average")
-
-
-                    if matched_ep and matched_ep.get("image"):
-
-
-                        ep_img = matched_ep["image"].get("original") or matched_ep["image"].get("medium")
-
-
-                        if ep_img:
-
-
-                            img_url = ep_img
-
-
-                
-
-
-                return {
-
-
-                    "image_url": img_url,
-
-
-                    "rating": episode_rating or rating,
-
-
-                    "episode_rating": episode_rating,
-
-
-                    "show_rating": rating,
-
-
-                    "rating_scope": "episode" if episode_rating else "show",
-
-
-                    "genres": data.get("genres", []),
-
-
-                    "description": f"TV Show | {data.get('type', '')}",
-
-
-                    "page_url": data.get("url"),
-
-
-                    "official_title": data.get("name"),
-
-
-                    "total_episodes": len(episodes) if (embed and data.get("_embedded", {}).get("episodes")) else 0
-
-
-                }
-
-
-        except Exception:
-
-
-            pass
-
-
+    def fetch_tvmaze_metadata(self, *args, **kwargs):
         return None
 
 
 
 
 
-    def fetch_jikan_metadata(self, title):
-
-
-        try:
-
-
-            # First try exact title
-
-
-            url = f"https://api.jikan.moe/v4/anime?q={urllib.parse.quote(title)}&limit=1"
-
-
-            r = requests.get(url, timeout=5)
-
-
-            if r.status_code == 200:
-
-
-                data = r.json()
-
-
-                results = data.get("data", [])
-
-
-                if results:
-
-
-                    anime = results[0]
-
-
-                    img_url = None
-
-
-                    if anime.get("images") and anime["images"].get("jpg"):
-
-
-                        img_url = anime["images"]["jpg"].get("large_image_url")
-
-
-                    return {
-
-
-                        "image_url": img_url,
-
-
-                        "rating": anime.get("score"),
-
-
-                        "genres": [g.get("name") for g in anime.get("genres", []) if g.get("name")],
-
-
-                        "description": f"Anime | {anime.get('type', '')}",
-
-
-                        "page_url": anime.get("url"),
-
-
-                        "official_title": anime.get("title_english") or anime.get("title"),
-
-
-                        "total_episodes": anime.get("episodes", 0)
-
-
-                    }
-
-
-            # Retry with first 3 words of title (helps with long titles like "Re:ZERO - Starting...")
-
-
-            short = ' '.join(title.split()[:3])
-
-
-            if short != title:
-
-
-                url2 = f"https://api.jikan.moe/v4/anime?q={urllib.parse.quote(short)}&limit=5"
-
-
-                r2 = requests.get(url2, timeout=5)
-
-
-                if r2.status_code == 200:
-
-
-                    data2 = r2.json()
-
-
-                    results2 = data2.get("data", [])
-
-
-                    for anime in results2:
-
-
-                        img_url = None
-
-
-                        if anime.get("images") and anime["images"].get("jpg"):
-
-
-                            img_url = anime["images"]["jpg"].get("large_image_url")
-
-
-                        if img_url:
-
-
-                            return {
-
-
-                                "image_url": img_url,
-
-
-                                "rating": anime.get("score"),
-
-
-                                "genres": [g.get("name") for g in anime.get("genres", []) if g.get("name")],
-
-
-                                "description": f"Anime | {anime.get('type', '')}",
-
-
-                                "page_url": anime.get("url"),
-
-
-                                "official_title": anime.get("title_english") or anime.get("title"),
-
-
-                                "total_episodes": anime.get("episodes", 0)
-
-
-                            }
-
-
-        except Exception:
-
-
-            pass
-
-
+    def fetch_jikan_metadata(self, *args, **kwargs):
         return None
 
 
 
 
 
-    def fetch_anilist_metadata(self, title):
-
-
-        """Fetch anime metadata from AniList (free GraphQL API, no auth, best English title matching)."""
-
-
-        try:
-
-
-            query = """
-
-
-            query ($search: String) {
-
-
-              Media(search: $search, type: ANIME) {
-
-
-                id title { romaji english }
-
-
-                coverImage { extraLarge large }
-
-
-                averageScore genres siteUrl episodes
-
-
-              }
-
-
-            }
-
-
-            """
-
-
-            r = requests.post(
-
-
-                "https://graphql.anilist.co",
-
-
-                json={"query": query, "variables": {"search": title}},
-
-
-                headers={"Content-Type": "application/json"},
-
-
-                timeout=8
-
-
-            )
-
-
-            if r.status_code == 200:
-
-
-                media = r.json().get("data", {}).get("Media")
-
-
-                if media:
-
-
-                    img = media.get("coverImage", {})
-
-
-                    img_url = img.get("extraLarge") or img.get("large")
-
-
-                    score = media.get("averageScore")
-
-
-                    t = media.get("title", {})
-
-
-                    official = t.get("english") or t.get("romaji")
-
-
-                    return {
-
-
-                        "image_url": img_url,
-
-
-                        "rating": round(score / 10, 1) if score else None,
-
-
-                        "genres": media.get("genres", []),
-
-
-                        "description": f"Anime | {', '.join(media.get('genres', [])[:2])}",
-
-
-                        "page_url": media.get("siteUrl"),
-
-
-                        "anilistId": media.get("id"),
-
-
-                        "official_title": official,
-
-
-                        "total_episodes": media.get("episodes", 0)
-
-
-                    }
-
-
-        except Exception:
-
-
-            pass
-
-
+    def fetch_anilist_metadata(self, *args, **kwargs):
         return None
 
 
 
 
 
-    def fetch_omdb_metadata(self, title, year=None):
-
-
-        """Fetch movie/show metadata from OMDb API (free, no auth needed for basic use)."""
-
-
-        try:
-
-
-            params = {
-
-
-                't': title,
-
-
-                'apikey': 'thewdb',    # public demo key (thewdb is more reliable than trilogy)
-
-
-                'plot': 'short',
-
-
-                'r': 'json'
-
-
-            }
-
-
-            if year:
-
-
-                params['y'] = year
-
-
-            r = requests.get('https://www.omdbapi.com/', params=params, timeout=5)
-
-
-            if r.status_code == 200:
-
-
-                data = r.json()
-
-
-                if data.get('Response') == 'True':
-
-
-                    poster = data.get('Poster')
-
-
-                    if poster == 'N/A':
-
-
-                        poster = None
-
-
-                    rating = data.get('imdbRating')
-
-
-                    if rating == 'N/A':
-
-
-                        rating = None
-
-
-                    genres = [g.strip() for g in data.get('Genre', '').split(',') if g.strip() and g.strip() != 'N/A']
-
-
-                    plot = data.get('Plot', '')
-
-
-                    if plot == 'N/A':
-
-
-                        plot = ''
-
-
-                    imdb_id = data.get('imdbID', '')
-
-
-                    page_url = f"https://www.imdb.com/title/{imdb_id}/" if imdb_id else None
-
-
-                    media_type = data.get('Type', 'movie').capitalize()
-
-
-                    description = f"{media_type} | {rating}★ | {', '.join(genres[:2])}" if genres else f"{media_type}"
-
-
-                    return {
-
-
-                        "image_url": poster,
-
-
-                        "rating": rating,
-
-
-                        "genres": genres,
-
-
-                        "description": description,
-
-
-                        "page_url": page_url,
-
-
-                        "plot": plot,
-
-
-                        "official_title": data.get("Title")
-
-
-                    }
-
-
-        except Exception:
-
-
-            pass
-
-
+    def fetch_omdb_metadata(self, *args, **kwargs):
         return None
 
 
 
 
 
-    def fetch_wikipedia_metadata(self, title):
-
-
-        meta = self.search_wikipedia(f"{title} film")
-
-
-        if not meta:
-
-
-            meta = self.search_wikipedia(title)
-
-
-        return meta
-
-
-
-
-
-    def search_wikipedia(self, query):
-
-
-        try:
-
-
-            search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&format=json"
-
-
-            r = requests.get(search_url, timeout=3)
-
-
-            if r.status_code == 200:
-
-
-                data = r.json()
-
-
-                results = data.get("query", {}).get("search", [])
-
-
-                if results:
-
-
-                    best_title = results[0]["title"]
-
-
-                    img_url = f"https://en.wikipedia.org/w/api.php?action=query&titles={urllib.parse.quote(best_title)}&prop=pageimages&format=json&pithumbsize=500"
-
-
-                    img_r = requests.get(img_url, timeout=3)
-
-
-                    if img_r.status_code == 200:
-
-
-                        img_data = img_r.json()
-
-
-                        pages = img_data.get("query", {}).get("pages", {})
-
-
-                        for pid, pdata in pages.items():
-
-
-                            if pdata.get("thumbnail"):
-
-
-                                return {
-
-
-                                    "image_url": pdata["thumbnail"].get("source"),
-
-
-                                    "rating": None,
-
-
-                                    "genres": ["Wiki"],
-
-
-                                    "description": f"Wiki | {best_title}",
-
-
-                                    "page_url": f"https://en.wikipedia.org/wiki/{urllib.parse.quote(best_title.replace(' ', '_'))}"
-
-
-                                }
-
-
-        except Exception:
-
-
-            pass
-
-
+    def fetch_wikipedia_metadata(self, *args, **kwargs):
         return None
 
 
