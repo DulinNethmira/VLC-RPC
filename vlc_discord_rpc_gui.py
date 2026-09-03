@@ -73,7 +73,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.9.2"
+CURRENT_VERSION = "5.9.3"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -5900,71 +5900,34 @@ class RPCBackend:
 
 
                             ep_str = self.state_data.get("episode_str", "")
-
-
                             _meta = self.state_data.get("metadata") or {}
 
+                            genres = _meta.get("genres", [])
+                            if isinstance(genres, list):
+                                genres = [g for g in genres if g.lower() not in ("anime", "animation")]
+                                genre_str = ", ".join(genres[:3])
+                            else:
+                                genre_str = ""
+
+                            if not ep_str:
+                                ep_str = genre_str if genre_str else "Feature Length"
 
                             rating = _meta.get("episode_rating") or _meta.get("rating") or _meta.get("imdb_rating") or ""
-
-
-                            # Format rating: Jikan gives float (8.5), TVMaze gives float too
-
-
                             if rating:
-
-
                                 try:
-
-
                                     rating = str(round(float(rating), 1))
-
-
                                 except (ValueError, TypeError):
-
-
                                     rating = str(rating)
-
-
                             rating_str = f" | ⭐ {rating}" if rating else ""
                             if watch_mode == "REWATCH":
                                 state_str = f"{ep_str} | Rewatch #{self.state_data.get('rewatch_number', 1)}{rating_str}"
                             else:
                                 state_str = f"{ep_str}{rating_str}"
 
-
                             if self.state_data["playback_state"] == "paused":
-
-
                                 kwargs["state"] = f"Paused | {state_str}" if state_str else "Paused"
-
-
                             else:
-
-
                                 kwargs["state"] = state_str
-
-
-
-
-
-                            genres = _meta.get("genres", [])
-
-
-                            if isinstance(genres, list):
-
-
-                                genres = [g for g in genres if g.lower() not in ("anime", "animation")]
-
-
-                                genre_str = ", ".join(genres[:3])
-
-
-                            else:
-
-
-                                genre_str = ""
-
 
                             kwargs["large_text"] = self.state_data.get("cleaned_title", self.state_data["title"]) + (f" • {genre_str}" if genre_str else "")
 
