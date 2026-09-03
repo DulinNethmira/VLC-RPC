@@ -28,7 +28,7 @@ try:
     import guessit
 except ImportError:
     guessit = None
-from pypresence import Presence, ActivityType
+from pypresence import Presence
 import webview
 import pystray
 from PIL import Image
@@ -73,7 +73,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.9.0"
+CURRENT_VERSION = "5.9.1"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -704,6 +704,10 @@ class DiagnosticsManager:
                 self.set_state("vlc", "HEALTHY", "Self-test: Connection successful", is_success=True)
             else:
                 self.set_state("vlc", "DEGRADED", f"Self-test: HTTP {r.status_code}", is_failure=True)
+        except requests.exceptions.RequestException as e:
+            # Handle cleanly if VLC isn't running rather than a huge stack trace
+            self.report_error("vlc", "ConnectionFailed", "Could not connect to VLC HTTP interface")
+            self.set_state("vlc", "OFFLINE", "Self-test: VLC unreachable", is_failure=True)
         except Exception as e:
             self.report_error("vlc", "SelfTestError", str(e))
             self.set_state("vlc", "ERROR", f"Self-test failed: {str(e)}", is_failure=True)
@@ -718,10 +722,12 @@ class DiagnosticsManager:
         
         # 3. Test Database
         try:
-            with self.backend_ref._db_lock:
-                cursor = self.backend_ref.db_conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM history")
-                count = cursor.fetchone()[0]
+            import sqlite3
+            conn = sqlite3.connect(self.backend_ref.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM history")
+            count = cursor.fetchone()[0]
+            conn.close()
             self.set_state("database", "HEALTHY", f"Self-test: Read OK, {count} records", is_success=True)
         except Exception as e:
             self.report_error("database", "SelfTestError", str(e))
@@ -731,9 +737,9 @@ class DiagnosticsManager:
         try:
             import os
             import json
-            cache_file = self.backend_ref.CACHE_FILE
-            if os.path.exists(cache_file):
-                with open(cache_file, "r", encoding="utf-8") as f:
+            # CACHE_FILE is a global variable
+            if os.path.exists(CACHE_FILE):
+                with open(CACHE_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self.set_state("cache", "HEALTHY", f"Self-test: Loaded {len(data)} items", is_success=True)
             else:
@@ -2306,6 +2312,13 @@ class RPCBackend:
             self.anilist_log(
                 f"[OK] Synced AniList ID {identity['anilist_id']}: "
                 f"E{entry['progress']} -> {entry['status']}"
+            )
+            self.notify(
+                "anilist_sync_success", 
+                "AniList Synced!", 
+                f"Episode {entry['progress']} -> {entry['status']}", 
+                priority=NotificationPriority.NORMAL, 
+                icon="sync"
             )
             threading.Thread(target=self.force_sync_widget, daemon=True).start()
             threading.Thread(target=self.force_sync_widget_v2, daemon=True).start()
@@ -5789,7 +5802,6 @@ class RPCBackend:
 
 
                         if media_type == "music":
-                            kwargs["activity_type"] = ActivityType.LISTENING
                             kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
 
 
@@ -5800,7 +5812,6 @@ class RPCBackend:
 
 
                         elif media_type == "movie":
-                            kwargs["activity_type"] = ActivityType.WATCHING
                             kwargs["details"] = self.state_data.get("cleaned_title", self.state_data["title"])
 
 
@@ -5877,7 +5888,6 @@ class RPCBackend:
 
 
                             # tv_show or anime
-                            kwargs["activity_type"] = ActivityType.WATCHING
                             watch_mode = self.state_data.get("watch_mode", "NORMAL")
                             cleaned_title = self.state_data.get("cleaned_title", self.state_data["title"])
                             kwargs["details"] = f"🔄 Rewatching {cleaned_title}" if watch_mode == "REWATCH" else cleaned_title
@@ -7710,6 +7720,8 @@ class WebApi:
                 return {"success": True, "devices": data}
             else:
                 return {"success": True, "devices": []}
+        except requests.exceptions.RequestException:
+            return {"success": False, "error": "Cloud server is currently unavailable or sleeping. Please try again later."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
