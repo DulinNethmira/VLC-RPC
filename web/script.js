@@ -15,7 +15,7 @@ function formatTime(seconds) {
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-const COVER_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180"%3E%3Crect fill="%2322222a" width="180" height="180"/%3E%3Cpath d="M50 56h80v68H50z" fill="%2330303a"/%3E%3Cpath d="M58 70h64M58 86h64M58 102h42" stroke="%235b6070" stroke-width="8" stroke-linecap="round"/%3E%3C/svg%3E';
+const COVER_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22180%22 height=%22180%22 viewBox=%220 0 180 180%22%3E%3Crect fill=%22%2322222a%22 width=%22180%22 height=%22180%22/%3E%3Cpath d=%22M50 56h80v68H50z%22 fill=%22%2330303a%22/%3E%3Cpath d=%22M58 70h64M58 86h64M58 102h42%22 stroke=%22%235b6070%22 stroke-width=%228%22 stroke-linecap=%22round%22/%3E%3C/svg%3E';
 
 function parseMarkdown(text) {
     if (!text) return '';

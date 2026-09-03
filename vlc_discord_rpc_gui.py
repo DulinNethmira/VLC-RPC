@@ -5998,12 +5998,14 @@ class RPCBackend:
             
         query = """
         query {
-          Page(page: 1, perPage: 10) {
-            mediaList(status: CURRENT, type: ANIME) {
+          Page(page: 1, perPage: 15) {
+            airingSchedules(notYetAired: true, sort: TIME) {
+              airingAt
+              episode
               media {
                 title { romaji english }
-                nextAiringEpisode { episode timeUntilAiring airingAt }
                 coverImage { medium }
+                isAdult
               }
             }
           }
@@ -6019,13 +6021,20 @@ class RPCBackend:
             )
             if r.status_code == 200:
                 data = r.json()
-                items = data.get("data", {}).get("Page", {}).get("mediaList", [])
+                items = data.get("data", {}).get("Page", {}).get("airingSchedules", [])
                 results = []
                 for item in items:
                     media = item.get("media")
-                    if media and media.get("nextAiringEpisode"):
-                        results.append(media)
-                results.sort(key=lambda x: x["nextAiringEpisode"]["timeUntilAiring"])
+                    if media and not media.get("isAdult"):
+                        results.append({
+                            "title": media.get("title"),
+                            "coverImage": media.get("coverImage"),
+                            "nextAiringEpisode": {
+                                "episode": item.get("episode"),
+                                "airingAt": item.get("airingAt"),
+                                "timeUntilAiring": item.get("airingAt") - int(time.time())
+                            }
+                        })
                 self._cached_airing_schedule = {"status": "ok", "items": results}
                 self._cached_airing_time = time.time()
                 return self._cached_airing_schedule
@@ -6542,7 +6551,11 @@ class WebApi:
             db_path = os.path.join(application_path, "history.db")
             conn = sqlite3.connect(db_path)
             c = conn.cursor()
-            c.execute("SELECT title, episode_str, is_music, watch_duration, timestamp FROM history ORDER BY id DESC LIMIT 50")
+            c.execute("""
+                SELECT h.title, h.episode_str, h.is_music, h.watch_duration, h.timestamp,
+                       (SELECT cover_url FROM local_media l WHERE (l.title = h.title OR l.filename = h.title) AND l.cover_url != '' AND l.cover_url IS NOT NULL LIMIT 1) as cover_url
+                FROM history h ORDER BY h.id DESC LIMIT 50
+            """)
             rows = c.fetchall()
             c.execute("SELECT SUM(watch_duration) FROM history")
             total_time = c.fetchone()[0] or 0
@@ -6566,7 +6579,8 @@ class WebApi:
                     "episode_str": r[1],
                     "is_music": bool(r[2]),
                     "duration": r[3],
-                    "timestamp": r[4]
+                    "timestamp": r[4],
+                    "cover_url": r[5] if len(r) > 5 else ""
                 })
             return {"success": True, "history": history_list, "total_time": total_time}
         except Exception as e:

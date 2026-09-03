@@ -57,17 +57,19 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v6.1.1"
-    release_title = "\u2728 v6.1.1 - Dashboard Layout Hotfixes"
-    release_notes = """### \U0001f680 What's New in v6.1.1!
+    tag_name = "v6.1.2"
+    release_title = "\u2728 v6.1.2 - Advanced Streaming Dashboard Hotfix"
+    release_notes = """### \U0001f680 What's New in v6.1.2!
 
-This is a hotfix release to address critical layout issues introduced in v6.1.0.
+We've polished the new Dashboard to feel exactly like a premium anime streaming site!
 
-#### 🔧 Fixes & Tweaks
-- **Settings Layout Bug**: Fixed a malformed DOM structure that caused the Settings page components to bleed over into the Library, History, and Dashboard tabs.
-- **Dashboard Scale Compatibility**: Swapped out CSS zoom scaling for a highly compatible CSS transform-based engine. Scaling out (e.g. 70%) now correctly fits the dashboard into your viewport without clipping!
+#### 🎨 Dashboard Enhancements
+- **Global Airing Schedule**: The "Airing Soon" tab now uses an advanced global AniList GraphQL query to fetch the worldwide anime airing schedule, rather than just polling your active list.
+- **Card Styling**: Added proper styling, hover animations, and cover-image ratios for the Continue Watching and Airing Soon cards to fix layout squishing.
+- **Cover Image Fallbacks**: Fixed a critical SVG parsing bug that caused missing covers to render as broken image icons instead of the sleek placeholder.
+- **History Data Join**: Fixed an issue where the new Dashboard wasn't joining the local media cache when fetching history, restoring cover art to your recent activity!
 
-Enjoy the polished command center! 🎉
+Enjoy the ultimate command center! 🎉
 """
 
     try:

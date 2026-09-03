@@ -1048,3 +1048,52 @@ select option {
         grid-template-columns: 1fr;
     }
 }
+
+
+/* Dashboard Card Overrides */
+.history-card, .airing-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 140px;
+    max-width: 160px;
+    background: rgba(0,0,0,0.2);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.2s, background 0.2s;
+}
+.history-card:hover, .airing-card:hover {
+    transform: translateY(-4px);
+    background: rgba(255,255,255,0.05);
+}
+.history-cover, .airing-cover {
+    width: 100%;
+    aspect-ratio: 2/3;
+    background: #111;
+    position: relative;
+}
+.history-cover img, .airing-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.history-info, .airing-info {
+    padding: 10px;
+}
+.history-title, .airing-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+}
+.history-meta, .airing-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.airing-ep {
+    color: var(--accent-ruby);
+    font-weight: bold;
+}
