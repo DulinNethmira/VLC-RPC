@@ -74,7 +74,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.9.5"
+CURRENT_VERSION = "5.9.6"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -7113,6 +7113,7 @@ class LocalLibraryScanner(threading.Thread):
             found_paths = set()
             extensions = {'.mkv', '.mp4', '.avi', '.webm', '.mp3', '.flac'}
             
+            tried_titles = set()
             for folder in folders:
                 if self.cancel_requested:
                     break
@@ -7183,6 +7184,12 @@ class LocalLibraryScanner(threading.Thread):
                             identity_key, _, _ = self.backend._anilist_identity_key(title, episode_str)
                             with self.backend._anilist_identity_lock:
                                 cached = self.backend.anilist_identity_cache.get(identity_key)
+                                
+                            if not cached and title not in tried_titles:
+                                tried_titles.add(title)
+                                self.backend._resolve_anilist_identity(identity_key, title, "")
+                                with self.backend._anilist_identity_lock:
+                                    cached = self.backend.anilist_identity_cache.get(identity_key)
                             
                             if cached and cached.get("validated") and cached.get("anilist_id"):
                                 anilist_id = cached.get("anilist_id")

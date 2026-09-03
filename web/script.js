@@ -1174,8 +1174,11 @@ window.showEpisodeModal = function(groupKey) {
 
 window.renderContinueWatching = function() {
     const rail = document.getElementById('continue-watching-rail');
-    let cw = libraryMedia.filter(m => m.watch_progress > 0 && (!m.duration || m.watch_progress < m.duration - 60)).sort((a,b) => b.watch_progress - a.watch_progress);
-    
+    let cw = libraryMedia.filter(m => {
+        if (m.watch_progress <= 0) return false;
+        let dur = m.duration > 0 ? m.duration : 1440;
+        return m.watch_progress < dur - 120;
+    }).sort((a,b) => b.watch_progress - a.watch_progress);
     let seriesSeen = new Set();
     let uniqueCw = [];
     for(let m of cw) {
