@@ -709,6 +709,13 @@ class DiagnosticsManager:
                 self.set_state("gemini", "ERROR", f"Self-test failed: {str(e)}", is_failure=True)
         else:
             self.set_state("gemini", "UNKNOWN", "Self-test: No API key")
+            
+        # Test MetadataEngine
+        if hasattr(self.backend_ref, 'metadata_engine'):
+            cache_size = len(self.backend_ref.metadata_engine.cache)
+            self.set_state("metadata", "HEALTHY", f"Self-test: Engine online ({cache_size} cached items)", is_success=True)
+        else:
+            self.set_state("metadata", "UNKNOWN", "Self-test: Engine missing")
         # 3. Test ArtworkEngine
         if hasattr(self.backend_ref, 'artwork_engine'):
             stats = self.backend_ref.artwork_engine.get_diagnostics()

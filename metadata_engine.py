@@ -179,8 +179,15 @@ class MetadataEngine:
             self._save_cache_unlocked()
             
     def _emit_diagnostic(self, event_type: str, data: Any = None):
-        if self.diagnostics_manager and hasattr(self.diagnostics_manager, "emit"):
-            self.diagnostics_manager.emit("metadata", event_type, data)
+        if self.diagnostics_manager and hasattr(self.diagnostics_manager, "set_state"):
+            if event_type == "cache_hit":
+                self.diagnostics_manager.set_state("metadata", "HEALTHY", "Cache Hit", is_success=True)
+            elif event_type == "resolved":
+                self.diagnostics_manager.set_state("metadata", "HEALTHY", f"Resolved via {data.get('provider', 'unknown')}", is_success=True)
+            elif event_type in ["unresolved", "negative_cache_hit"]:
+                self.diagnostics_manager.set_state("metadata", "HEALTHY", "Unresolved / Negative Cache", is_success=True)
+            elif event_type == "request_deduplicated":
+                self.diagnostics_manager.set_state("metadata", "HEALTHY", "Request Deduplicated", is_success=True)
 
     # ── Cache Key Normalization ─────────────────────────────────────────────
     @staticmethod
