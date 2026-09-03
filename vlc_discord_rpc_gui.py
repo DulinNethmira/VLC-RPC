@@ -24,6 +24,7 @@ from io import BytesIO
 import sqlite3
 import datetime
 import winreg
+from artwork_engine import ArtworkEngine
 try:
     import guessit
 except ImportError:
@@ -73,7 +74,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.9.3"
+CURRENT_VERSION = "5.9.4"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -790,6 +791,13 @@ class DiagnosticsManager:
                 self.set_state("gemini", "ERROR", f"Self-test failed: {str(e)}", is_failure=True)
         else:
             self.set_state("gemini", "UNKNOWN", "Self-test: No API key")
+        # 3. Test ArtworkEngine
+        if hasattr(self.backend_ref, 'artwork_engine'):
+            stats = self.backend_ref.artwork_engine.get_diagnostics()
+            if stats["last_failure"] and (time.time() - (stats.get("last_success") or 0)) > 3600:
+                self.set_state("artwork", "DEGRADED", f"Self-test: High failure rate. Misses: {stats['cache_misses']}", is_failure=True)
+            else:
+                self.set_state("artwork", "HEALTHY", f"Self-test: Cache Hits: {stats['cache_hits']} | Active: {stats['active_provider']}", is_success=True)
 
         self.log_event("Self-test sequence completed", component="system")
 
@@ -829,14 +837,21 @@ class RPCBackend:
 
 
     def __init__(self):
-
-
         self.config = DEFAULT_CONFIG.copy()
-
-
         self.config.update(load_config())
         self.diagnostics = DiagnosticsManager(self)
-
+        
+        class _ArtLogger:
+            def __init__(self, b): self.b = b
+            def error(self, m): self.b.log(f"[Art Error] {m}")
+            def warning(self, m): self.b.log(f"[Art Warn] {m}")
+            def info(self, m): self.b.log(f"[Art] {m}")
+            
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "art_cache")
+        if getattr(sys, 'frozen', False):
+            cache_dir = os.path.join(os.path.dirname(sys.executable), "art_cache")
+            
+        self.artwork_engine = ArtworkEngine(cache_dir, self.config, _ArtLogger(self))
 
         self.metadata_cache = {}
 
@@ -4768,13 +4783,14 @@ class RPCBackend:
                 self.state_data["metadata"] = metadata
 
 
-                self.state_data["local_image_path"] = metadata.get("image_url") if metadata else None
-
-
+                # Trigger background artwork resolution for the new provider metadata URL
+                if metadata and metadata.get("image_url"):
+                    self.artwork_engine.resolve_artwork_bg(input_uri, {}, metadata.get("image_url"))
+                
                 self.state_data["status_message"] = "Metadata loaded successfully."
 
 
-                # â”€â”€ Official title override â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                # ── Official title override ───────────────────────────────────────
 
 
                 # Every metadata source (AniList, OMDb, TVMaze, Jikan) now returns
@@ -5027,79 +5043,21 @@ class RPCBackend:
                         self.state_data["snapshot_id"] = ""
 
 
-                        art_data_uri = ""
+                        self.state_data["snapshot_id"] = ""
+                        self.state_data["local_arturl"] = ""
 
+                        # Kick off background artwork resolution (will update cache async)
+                        self.artwork_engine.resolve_artwork_bg(art_identity, meta)
 
-                        vlc_art_url = meta.get("artwork_url", "")
-
-
-                        try:
-
-
-                            if vlc_art_url and vlc_art_url.startswith("file:///"):
-
-
-                                import base64, mimetypes
-
-
-                                art_path = urllib.parse.unquote(vlc_art_url[8:]).replace("/", os.sep)
-
-
-                                if os.path.isfile(art_path):
-
-
-                                    mime = mimetypes.guess_type(art_path)[0] or "image/jpeg"
-
-
-                                    with open(art_path, "rb") as af:
-
-
-                                        art_data_uri = f"data:{mime};base64," + base64.b64encode(af.read()).decode()
-
-
-                            if not art_data_uri:
-
-
-                                import base64
-
-
-                                vlc_host = self.config.get("vlc_host", "localhost")
-
-
-                                vlc_port = self.config.get("vlc_port", 8080)
-
-
-                                vlc_pw = self.config.get("vlc_password", "")
-
-
-                                ar = requests.get(
-
-
-                                    f"http://{vlc_host}:{vlc_port}/art",
-
-
-                                    auth=HTTPBasicAuth("", vlc_pw), timeout=2
-
-
-                                )
-
-
-                                if ar.status_code == 200 and ar.headers.get("Content-Type", "").startswith("image"):
-
-
-                                    mime = ar.headers["Content-Type"].split(";")[0]
-
-
-                                    art_data_uri = f"data:{mime};base64," + base64.b64encode(ar.content).decode()
-
-
-                        except Exception:
-
-
-                            pass
-
-
-                        self.state_data["local_arturl"] = art_data_uri
+                    # Fast sync cache lookup for artwork (handles both background completion and offline cache)
+                    art_result = self.artwork_engine.resolve_artwork_fast(art_identity)
+                    if art_result:
+                        self.state_data["local_image_path"] = art_result.frontend_url
+                        self.state_data["discord_url"] = art_result.discord_url
+                    else:
+                        # Don't overwrite local_image_path if it was set elsewhere, but we might want to clear it?
+                        # Wait, we want to clear it if it's explicitly missing, but let's just clear discord_url.
+                        self.state_data["discord_url"] = ""
 
 
                     # else: same file, keep existing local_arturl (avoids flicker on Gemini title resolve)
@@ -5941,10 +5899,9 @@ class RPCBackend:
                         # (Discord silently ignores http:// poster URLs, showing the VLC logo instead.)
 
 
-                        if self.state_data["metadata"] and self.state_data["metadata"].get("image_url"):
-
-
-                            kwargs["large_image"] = ensure_https(self.state_data["metadata"]["image_url"])
+                        discord_url = self.state_data.get("discord_url")
+                        if discord_url:
+                            kwargs["large_image"] = ensure_https(discord_url)
 
 
                         else:
