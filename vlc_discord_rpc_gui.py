@@ -75,7 +75,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.0.1"
+CURRENT_VERSION = "6.0.2"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -2119,7 +2119,7 @@ class RPCBackend:
 
     def ensure_anilist_identity(self, title, episode_str, is_music=False):
         """Start identity resolution only for a new anime series/season context."""
-        if is_music or not title or not re.search(r"Episode\s*\d+", episode_str or "", re.IGNORECASE):
+        if is_music or not title:
             return
         identity_key, _, _ = self._anilist_identity_key(title, episode_str)
         current = self.current_anilist_identity or {}

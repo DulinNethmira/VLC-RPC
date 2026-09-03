@@ -57,10 +57,9 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v6.0.1"
-    
-    release_title = "\u2728 v6.0.1 - Metadata Diagnostics Hotfix"
-    release_notes = """### \U0001f680 What's New in v6.0.1!
+    tag_name = "v6.0.2"
+    release_title = "\u2728 v6.0.2 - Metadata Formatting & OVA Sync Fixes"
+    release_notes = """### \U0001f680 What's New in v6.0.2!
 
 We've completely overhauled how VLC RPC handles media metadata to make it faster, safer, and much more accurate.
 

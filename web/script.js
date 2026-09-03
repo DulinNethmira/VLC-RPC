@@ -1362,7 +1362,7 @@ function formatRelativeTime(timestamp) {
     return Math.floor(seconds / 86400) + "d ago";
 }
 
-function formatTime(timestamp) {
+function formatTimestamp(timestamp) {
     const d = new Date(timestamp * 1000);
     return d.toTimeString().split(' ')[0]; // HH:MM:SS
 }
@@ -1442,7 +1442,7 @@ function renderDiagnosticsTimeline(timeline) {
     for (const event of sorted) {
         html += `
             <div class="timeline-item">
-                <div class="timeline-time">${formatTime(event.timestamp)} <span style="opacity:0.5; margin-left: 4px;">[${event.component}]</span></div>
+                <div class="timeline-time">${formatTimestamp(event.timestamp)} <span style="opacity:0.5; margin-left: 4px;">[${event.component}]</span></div>
                 <div>${event.message}</div>
             </div>
         `;

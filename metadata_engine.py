@@ -541,15 +541,6 @@ class MetadataEngine:
                 if ("'" in rg or " " in rg) and len(rg) > 3 and cleaned and rg.lower() not in cleaned.lower():
                     cleaned = cleaned + ": " + rg
                     
-            alt_title = guessed.get('alternative_title')
-            if alt_title:
-                if isinstance(alt_title, list):
-                    alt_title = ' '.join(alt_title)
-                if isinstance(alt_title, str) and cleaned:
-                    at = alt_title.strip()
-                    if at and at.lower() not in cleaned.lower():
-                        cleaned = cleaned + " " + at
-                    
             cleaned = _apply_smart_cap(cleaned)
             
             season = guessed.get('season')
