@@ -1213,18 +1213,44 @@ window.renderContinueWatching = function() {
         const progressPct = m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
         
         return `
-            <div class="lib-continue-card" onclick="playMedia(${m.id})">
-                <img src="${poster}" class="lib-continue-poster" onerror="this.src='icon.png'">
-                <div class="lib-continue-info">
-                    <div class="lib-continue-title">${title}</div>
-                    <div style="font-size: 0.75rem; color: rgba(255,255,255,0.6); margin-bottom: 4px;">${sub}</div>
-                    <div style="height: 4px; background: rgba(255,255,255,0.1); width: 100%; border-radius: 2px; overflow: hidden;">
-                        <div style="height: 100%; background: var(--accent-blurple); width: ${progressPct}%;"></div>
+            <div class="lib-continue-card" style="position: relative;">
+                <div class="dismiss-btn" onclick="dismissContinueWatching('${title.replace(/'/g, "\\'")}', event)" title="Mark as finished" 
+                     style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.6); color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 10; font-size: 12px; transition: background 0.2s;"
+                     onmouseover="this.style.background='rgba(255,50,50,0.8)'" onmouseout="this.style.background='rgba(0,0,0,0.6)'">
+                    <i class="fas fa-times"></i>
+                </div>
+                <div onclick="playMedia(${m.id})" style="display:flex; cursor:pointer;">
+                    <img src="${poster}" class="lib-continue-poster" onerror="this.src='icon.png'">
+                    <div class="lib-continue-info">
+                        <div class="lib-continue-title">${title}</div>
+                        <div style="font-size: 0.75rem; color: rgba(255,255,255,0.6); margin-bottom: 4px;">${sub}</div>
+                        <div style="height: 4px; background: rgba(255,255,255,0.1); width: 100%; border-radius: 2px; overflow: hidden;">
+                            <div style="height: 100%; background: var(--accent-blurple); width: ${progressPct}%;"></div>
+                        </div>
                     </div>
                 </div>
             </div>
         `;
     }).join('');
+};
+
+window.dismissContinueWatching = function(title, event) {
+    if (event) event.stopPropagation();
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.dismiss_continue_watching(title).then(data => {
+            if(data.success) {
+                // Update local state to hide immediately
+                libraryMedia.forEach(m => {
+                    if (m.title === title || m.filename === title) {
+                        m.watch_progress = 999999;
+                    }
+                });
+                window.renderContinueWatching();
+            } else {
+                alert("Failed to dismiss: " + data.error);
+            }
+        });
+    }
 };
 
 window.playMedia = function(id) {

@@ -74,7 +74,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "5.9.7"
+CURRENT_VERSION = "5.9.8"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -7809,6 +7809,18 @@ class WebApi:
                 
             conn.close()
             return {"success": True, "media": media}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def dismiss_continue_watching(self, title):
+        try:
+            db_path = getattr(self._backend, 'db_path', None)
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("UPDATE history SET watch_duration=999999 WHERE title=?", (title,))
+            conn.commit()
+            conn.close()
+            return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
