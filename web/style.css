@@ -971,8 +971,16 @@ select option {
     flex-direction: column;
     gap: var(--space-xl);
 }
+.tab-content {
+    flex: 1;
+    overflow-y: auto;
+    position: relative;
+    min-width: 0;
+}
+
 .dashboard-section {
     padding: var(--space-lg);
+    min-width: 0;
 }
 .dashboard-section h3 {
     margin-top: 0;

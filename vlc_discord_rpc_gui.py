@@ -75,7 +75,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.1.4"
+CURRENT_VERSION = "6.1.9"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -778,7 +778,14 @@ class RPCBackend:
             cache_dir = os.path.join(os.path.dirname(sys.executable), "art_cache")
             
         self.artwork_engine = ArtworkEngine(cache_dir, self.config, _ArtLogger(self))
-        self.metadata_engine = MetadataEngine(diagnostics_manager=self.diagnostics, config=self.config)
+        if getattr(sys, 'frozen', False):
+            application_path = os.path.dirname(sys.executable)
+        else:
+            application_path = os.path.dirname(os.path.abspath(__file__))
+            
+        # Initialize metadata engine with authoritative cache path
+        metadata_cache_path = os.path.join(application_path, "metadata_cache.json")
+        self.metadata_engine = MetadataEngine(cache_file=metadata_cache_path, diagnostics_manager=self.diagnostics, config=self.config)
 
         self.metadata_cache = {}
 
@@ -4414,6 +4421,7 @@ class RPCBackend:
                 
                 if result.image_url:
                     self.artwork_engine.resolve_artwork_bg(input_uri, {}, result.image_url)
+                    self.last_watched_cover = result.image_url
                 else:
                     # Fallback to local library or history
                     if hasattr(self, "web_api") and hasattr(self.web_api, "_get_cached_cover_for_title"):
@@ -4445,14 +4453,17 @@ class RPCBackend:
                         self.log(f"[Metadata] Using fallback cover for '{cleaned_title}'")
                         
         try:
+            gemini_key = self.config.get("gemini_api_key", "").strip()
             self.metadata_engine.resolve_async(
                 file_path=input_uri,
                 raw_title=cleaned_title + (f" E{episode_str}" if episode_str and not is_music else ""),
-                media_type_hint="music" if is_music else media_type_hint,
+                filename=cleaned_title,
+                media_type_hint=media_type_hint,
                 artist=artist,
                 is_music=is_music,
                 generation=generation,
-                on_complete=on_complete
+                on_complete=on_complete,
+                gemini_api_key=gemini_key
             )
         except Exception as e:
             self.log(f"[Metadata] FETCH FAILED: {e}")
@@ -4783,141 +4794,12 @@ class RPCBackend:
 
 
                     raw_name = file_name or self.state_data["title"]
-
-
-                    gemini_key = self.config.get("gemini_api_key", "").strip()
-
-
-                    cleaned_title, episode_str = None, None
-
-
-
-
-
-                    if gemini_key:
-
-
-                        cached = self.gemini_cache.get(raw_name)
-
-
-                        last_fail = self.gemini_fail_times.get(raw_name, 0)
-
-
-                        # Spawn a new thread if: never tried, OR last failure was >60s ago
-
-
-                        should_try = (
-
-
-                            raw_name not in self.gemini_cache
-
-
-                            or (cached is None and time.time() - last_fail > 3600)
-
-
-                        )
-
-
-                        if should_try:
-
-
-                            self.gemini_cache[raw_name] = "pending"
-
-
-                            def _run_gemini(name, key, gen):
-                                # Always clear pending in every terminal path.
-                                try:
-                                    res = self.metadata_engine.query_gemini(name, key)
-                                    t, e, mt = media_identity_to_display(res)
-                                except Exception as _ge:
-                                    self.gemini_cache[name] = None
-                                    self.gemini_fail_times[name] = time.time()
-                                    self.anilist_log(f"[Gemini AI] Exception resolving title: {_ge}")
-                                    return
-
-                                # Stale generation: another file loaded – discard but clear pending.
-                                if gen != self.media_generation:
-                                    self.gemini_cache[name] = None
-                                    return
-
-                                if t:
-
-
-                                    self.gemini_cache[name] = (t, e, mt or "")
-
-
-                                    self.anilist_log(f"[Gemini AI] Match: {t} {e}")
-
-
-                                    self.save_gemini_cache()
-
-
-                                else:
-
-
-                                    # Don't permanently block - allow retry after 1 hour
-
-
-                                    self.gemini_cache[name] = None
-
-
-                                    self.gemini_fail_times[name] = time.time()
-
-
-                                    self.anilist_log(f"[Gemini AI] Failed to resolve title. (Auto-retry in 1h)")
-
-
-                            threading.Thread(target=_run_gemini, args=(raw_name, gemini_key, self.media_generation), daemon=True).start()
-
-
-
-
-
-                        cached = self.gemini_cache.get(raw_name)
-
-
-                        if cached and cached != "pending":
-
-
-                            cleaned_title, episode_str = cached[0], cached[1]
-
-
-                            ai_media_type = cached[2] if len(cached) > 2 else ""
-
-
-                            # Map Gemini media_type to our internal types
-
-
-                            if ai_media_type in ("anime", "ova", "special"):
-
-
-                                media_type = "anime"
-
-
-                            elif ai_media_type == "movie":
-
-
-                                media_type = "movie"
-
-
-                            elif ai_media_type in ("tv",):
-
-
-                                media_type = "tv_show"
-
-
-                            elif ai_media_type in ("song", "music_video"):
-
-
-                                media_type = "music"
-
-
-
-
-
+                    # Instantly parse filename deterministically without blocking
+                    identity = self.metadata_engine.parse_filename(raw_name)
+                    cleaned_title = identity.title
+                    episode_str = str(identity.episode) if identity.episode else ""
+                    
                     if not cleaned_title:
-
-
                         cleaned_title, episode_str, _ = media_identity_to_display(clean_title(raw_name))
 
 
@@ -5013,18 +4895,6 @@ class RPCBackend:
 
 
 
-                    # Don't trigger metadata fetch if Gemini is still pending —
-
-
-                    # wait for it to resolve so we get the correct title and type.
-
-
-                    gemini_pending = (gemini_key and self.gemini_cache.get(raw_name) == "pending")
-
-
-
-
-
                     if self.force_update_flag:
 
 
@@ -5046,7 +4916,7 @@ class RPCBackend:
 
 
 
-                    if track_key != last_track_key and not gemini_pending:
+                    if track_key != last_track_key :
 
 
                         if hasattr(self, 'last_watched_title_raw') and self.last_watched_title_raw != self.state_data['title']:
@@ -6548,31 +6418,8 @@ class WebApi:
         download_url = self._backend.state_data.get("update_download_url")
         if not download_url:
             return {"success": False, "error": "No download URL found."}
-        self._backend.state_data["update_status"] = "downloading"
-        self._backend.state_data["update_progress"] = 0
-        def _download_task():
-            try:
-                import tempfile
-                # Request the file
-                r = requests.get(download_url, stream=True, timeout=20)
-                r.raise_for_status()
-                total_size = int(r.headers.get('content-length', 0))
-                temp_exe = os.path.join(tempfile.gettempdir(), "VLC_RPC_Update.exe")
-                downloaded_size = 0
-                with open(temp_exe, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded_size += len(chunk)
-                            if total_size > 0:
-                                self._backend.state_data["update_progress"] = int((downloaded_size / total_size) * 100)
-                self._backend.state_data["update_temp_exe"] = temp_exe
-                self._backend.state_data["update_status"] = "ready"
-                self._backend.state_data["update_progress"] = 100
-            except Exception as e:
-                pass
-                self._backend.state_data["update_status"] = "error"
-        threading.Thread(target=_download_task, daemon=True).start()
+        import webbrowser
+        webbrowser.open(download_url)
         return {"success": True}
     def install_update(self):
         """Launch the downloaded silent installer and kill this app."""
@@ -6602,8 +6449,8 @@ class WebApi:
             conn = sqlite3.connect(db_path)
             c = conn.cursor()
             c.execute("""
-                SELECT h.title, h.episode_str, h.is_music, h.watch_duration, h.timestamp,
-                       COALESCE(NULLIF(h.cover_url, ''), (SELECT cover_url FROM local_media l WHERE (l.title = h.title OR l.filename = h.title) AND l.cover_url != '' AND l.cover_url IS NOT NULL LIMIT 1)) as cover_url
+                SELECT h.title, h.episode_str, h.is_music, h.watch_duration, h.timestamp, h.cover_url,
+                       (SELECT cover_url FROM local_media l WHERE (l.title = h.title OR l.filename = h.title) AND l.cover_url != '' AND l.cover_url IS NOT NULL LIMIT 1) as local_cover
                 FROM history h ORDER BY h.id DESC LIMIT 50
             """)
             rows = c.fetchall()
@@ -6611,6 +6458,7 @@ class WebApi:
             total_time = c.fetchone()[0] or 0
             conn.close()
             history_list = []
+            
             # Inject the CURRENTLY playing item at the top with live duration
             b = self._backend
             if hasattr(b, 'last_watched_title') and b.last_watched_title and b.current_watch_duration > 0:
@@ -6624,12 +6472,21 @@ class WebApi:
                     "cover_url": getattr(b, 'last_watched_cover', "") or getattr(self, "_get_cached_cover_for_title", lambda x: "")(b.last_watched_title)
                 })
                 total_time += int(b.current_watch_duration)
+                
             for r in rows:
-                c_url = r[5] if len(r) > 5 and r[5] else ""
+                title = r[0]
+                db_cover = r[5] if len(r) > 5 and r[5] else ""
+                local_cover = r[6] if len(r) > 6 and r[6] else ""
+                
+                # Priority: DB -> Cached -> Local -> Placeholder
+                c_url = db_cover
                 if not c_url and hasattr(self, "_get_cached_cover_for_title"):
-                    c_url = self._get_cached_cover_for_title(r[0])
+                    c_url = self._get_cached_cover_for_title(title)
+                if not c_url:
+                    c_url = local_cover
+                    
                 history_list.append({
-                    "title": r[0],
+                    "title": title,
                     "episode_str": r[1],
                     "is_music": bool(r[2]),
                     "duration": r[3],

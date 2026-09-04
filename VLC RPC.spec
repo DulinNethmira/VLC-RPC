@@ -1,17 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
-
-datas = [('web', 'web')]
-datas += collect_data_files('babelfish')
-datas += collect_data_files('guessit')
 
 
 a = Analysis(
     ['vlc_discord_rpc_gui.py'],
     pathex=[],
     binaries=[],
-    datas=datas,
-    hiddenimports=['notifier_worker', 'metadata_engine'] + collect_submodules('babelfish') + collect_submodules('guessit'),
+    datas=[('web', 'web')],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -37,6 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version='version_info.txt',
     icon=['web\\icon.ico'],
 )
 coll = COLLECT(

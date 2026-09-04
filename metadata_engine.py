@@ -182,7 +182,13 @@ class MetadataEngine:
             import tempfile
             temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(self.cache_file)))
             with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
-                json.dump({k: v.to_dict() for k, v in self.cache.items()}, f)
+                dump_data = {}
+                for k, v in self.cache.items():
+                    if k == "__anilist_identity_cache_v1__":
+                        dump_data[k] = v
+                    elif hasattr(v, "to_dict"):
+                        dump_data[k] = v.to_dict()
+                json.dump(dump_data, f)
             os.replace(temp_path, self.cache_file)
         except Exception as e:
             logger.error(f"Atomic cache save failed: {e}")
@@ -204,6 +210,279 @@ class MetadataEngine:
 
     # ── Cache Key Normalization ─────────────────────────────────────────────
     @staticmethod
+    def _normalize_cache_key(title: str, season: Optional[int] = None, episode: Optional[int] = None, media_type: str = "") -> str:
+        """Build a normalized, path-independent cache key from media identity.
+        A renamed/moved file with the same title+episode still resolves to the
+        same cache entry."""
+        norm = re.sub(r'[^a-z0-9]+', '_', title.lower()).strip('_')
+        parts = [media_type or "unknown", norm]
+        if season is not None:
+            parts.append(f"s{season}")
+        if episode is not None:
+            parts.append(f"e{episode}")
+        return ":".join(parts)
+
+    @staticmethod
+    def _path_cache_key(file_path: str) -> str:
+        """Secondary cache key based on file path (for fast first-pass lookups)."""
+        return f"path:{file_path}"
+
+    def _cache_lookup(self, identity: 'MediaIdentity', file_path: str = "") -> Optional['MetadataResult']:
+        """Dual-key cache lookup: try normalized identity key first, then path key."""
+        norm_key = self._normalize_cache_key(identity.title, identity.season, identity.episode, identity.media_type)
+        result = self.cache.get(norm_key)
+        if result:
+            result.cache_hit = True
+            return result
+        if file_path:
+            path_key = self._path_cache_key(file_path)
+            result = self.cache.get(path_key)
+            if result:
+                result.cache_hit = True
+                return result
+        return None
+
+    def _cache_store(self, identity: 'MediaIdentity', result: 'MetadataResult', file_path: str = ""):
+        """Store result under both normalized and path keys."""
+        norm_key = self._normalize_cache_key(identity.title, identity.season, identity.episode, identity.media_type)
+        with self._cache_lock:
+            self.cache[norm_key] = result
+            if file_path:
+                self.cache[self._path_cache_key(file_path)] = result
+            self._save_cache_unlocked()
+
+    # ── Negative Caching & Backoff ──────────────────────────────────────────
+    NEGATIVE_CACHE_TTL = 3600  # 1 hour before retrying a failed resolution
+    PROVIDER_BACKOFF_INITIAL = 30  # seconds
+    PROVIDER_BACKOFF_MAX = 1800  # 30 minutes
+
+    def _is_negative_cached(self, cache_key: str) -> bool:
+        ts = self.negative_cache.get(cache_key)
+        if ts is None:
+            return False
+        if time.time() - ts > self.NEGATIVE_CACHE_TTL:
+            del self.negative_cache[cache_key]
+            return False
+        return True
+
+    def _set_negative_cache(self, cache_key: str):
+        self.negative_cache[cache_key] = time.time()
+
+    # ── Resolution API ──────────────────────────────────────────────────────
+    def resolve_sync(self, file_path: str = "", filename: str = "", raw_title: str = "",
+                     media_type_hint: str = "") -> Optional['MetadataResult']:
+        """Fast-path, cache-only resolution. Never blocks on network.
+        Returns MetadataResult if cached, None otherwise."""
+        identity = self.parse_filename(raw_title or filename)
+        if media_type_hint:
+            identity.media_type = media_type_hint
+        if file_path:
+            identity.file_path = file_path
+
+        with self._cache_lock:
+            result = self._cache_lookup(identity, file_path)
+        return result
+
+    def resolve_async(self, file_path: str = "", filename: str = "", raw_title: str = "",
+                      media_type_hint: str = "", artist: str = "", is_music: bool = False,
+                      generation: Optional[int] = None,
+                      on_complete: Optional[Callable[['MetadataResult', int], None]] = None,
+                      gemini_api_key: str = "") -> 'Future':
+        """Launch background metadata resolution."""
+        identity = self.parse_filename(raw_title if raw_title else filename)
+        if media_type_hint:
+            identity.media_type = media_type_hint
+
+        dedup_key = self._normalize_cache_key(identity.title, identity.season, identity.episode, identity.media_type)
+
+        with self._in_flight_lock:
+            existing_future = self._in_flight.get(dedup_key)
+            if existing_future:
+                if not existing_future.done():
+                    self._emit_diagnostic("request_deduplicated", {"key": dedup_key})
+                    return existing_future
+
+            future = Future()
+            self._in_flight[dedup_key] = future
+
+        def _resolve_worker():
+            try:
+                result = self._resolve_pipeline(identity, file_path, artist, is_music, generation, gemini_api_key)
+                future.set_result(result)
+                if on_complete and generation is not None:
+                    on_complete(result, generation)
+            except Exception as e:
+                logger.error(f"Resolution pipeline error: {e}")
+                error_result = MetadataResult(
+                    identity=identity,
+                    verification_status="error",
+                    recognition_method="error",
+                    confidence=0.0,
+                    resolved_at=time.time()
+                )
+                future.set_result(error_result)
+                self._set_negative_cache(dedup_key)
+            finally:
+                with self._in_flight_lock:
+                    self._in_flight.pop(dedup_key, None)
+
+        threading.Thread(target=_resolve_worker, daemon=True).start()
+        return future
+
+    def _resolve_pipeline(self, identity: 'MediaIdentity', file_path: str = "",
+                          artist: str = "", is_music: bool = False,
+                          generation: Optional[int] = None, gemini_api_key: str = "") -> 'MetadataResult':
+        """Full resolution pipeline: cache → providers → gemini fallback."""
+        import time
+
+        with self._cache_lock:
+            cached = self._cache_lookup(identity, file_path)
+        if cached and cached.confidence >= 0.6:
+            self._emit_diagnostic("cache_hit", {"title": identity.title})
+            return cached
+
+        search_title = re.sub(r'\b(19|20)\d{2}\b', '', identity.title)
+        search_title = re.sub(r'[\(\)]', '', search_title).strip()
+        search_title = re.sub(r'\bSeason\s+\d+\b', '', search_title, flags=re.IGNORECASE).strip()
+        search_title = re.sub(r'\s{2,}', ' ', search_title).strip()
+
+        season_num = identity.season
+        episode_num = identity.episode
+        media_type = identity.media_type or "movie"
+
+        year_match = re.search(r'\((\d{4})\)', identity.title)
+        year = year_match.group(1) if year_match else None
+
+        logger.info(f"[Pipeline] Resolving '{search_title}' type={media_type} S{season_num}E{episode_num}")
+        self._emit_diagnostic("engine_operational", {"title": search_title})
+
+        provider_result = None
+
+        if is_music or media_type == "music":
+            provider_result = self.fetch_itunes_metadata(search_title, artist)
+            if provider_result:
+                provider_result["_provider"] = "itunes"
+        elif media_type == "movie":
+            provider_result = self.fetch_omdb_metadata(search_title, year)
+            if provider_result:
+                provider_result["_provider"] = "omdb"
+            if not provider_result:
+                provider_result = self.fetch_anilist_metadata(search_title)
+                if provider_result:
+                    provider_result["_provider"] = "anilist"
+            if not provider_result:
+                provider_result = self.fetch_jikan_metadata(search_title)
+                if provider_result:
+                    provider_result["_provider"] = "jikan"
+        elif media_type == "anime":
+            base_query = identity.base_title if identity.base_title else search_title
+            if season_num and season_num > 1:
+                ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
+                suffix = ordinals.get(season_num, f"{season_num}th")
+                
+                provider_result = self.fetch_anilist_metadata(f"{base_query} {suffix} Season")
+                if provider_result:
+                    provider_result["_provider"] = "anilist"
+                    
+                if not provider_result:
+                    provider_result = self.fetch_anilist_metadata(f"{base_query} Season {season_num}")
+                    if provider_result:
+                        provider_result["_provider"] = "anilist"
+                        
+            if not provider_result:
+                provider_result = self.fetch_anilist_metadata(search_title)
+                if provider_result:
+                    provider_result["_provider"] = "anilist"
+                    
+            if not provider_result:
+                if season_num and season_num > 1:
+                    ordinals = {2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th"}
+                    suffix = ordinals.get(season_num, f"{season_num}th")
+                    provider_result = self.fetch_jikan_metadata(f"{base_query} {suffix} Season")
+                    if provider_result:
+                        provider_result["_provider"] = "jikan"
+                        
+            if not provider_result:
+                provider_result = self.fetch_jikan_metadata(search_title)
+                if provider_result:
+                    provider_result["_provider"] = "jikan"
+            if provider_result and not provider_result.get("rating"):
+                omdb = self.fetch_omdb_metadata(search_title, year)
+                if omdb and omdb.get("rating"):
+                    provider_result["rating"] = omdb["rating"]
+        elif media_type == "tv_show":
+            provider_result = self.fetch_tvmaze_metadata(search_title, season_num=season_num, episode_num=episode_num)
+            if provider_result:
+                provider_result["_provider"] = "tvmaze"
+            if provider_result and any(g.lower() in ("anime", "animation") for g in provider_result.get("genres", [])):
+                anilist_meta = self.fetch_anilist_metadata(search_title)
+                if anilist_meta:
+                    provider_result = anilist_meta
+                    provider_result["_provider"] = "anilist"
+            if not provider_result:
+                provider_result = self.fetch_omdb_metadata(search_title, year)
+                if provider_result:
+                    provider_result["_provider"] = "omdb"
+            if not provider_result:
+                provider_result = self.fetch_anilist_metadata(search_title)
+                if provider_result:
+                    provider_result["_provider"] = "anilist"
+
+        if not provider_result:
+            provider_result = self.fetch_wikipedia_metadata(search_title)
+            if provider_result:
+                provider_result["_provider"] = "wikipedia"
+
+        # Gemini Fallback if unresolved or low confidence
+        # Our deterministic parser is good, but if provider fails completely, Gemini can help classify.
+        if not provider_result and gemini_api_key:
+            gemini_res = self.query_gemini(identity.filename, gemini_api_key)
+            if gemini_res:
+                identity.title = gemini_res.get("title", identity.title)
+                identity.base_title = gemini_res.get("base_title", identity.base_title)
+                identity.season = gemini_res.get("season", identity.season)
+                identity.episode = gemini_res.get("episode", identity.episode)
+                identity.media_type = gemini_res.get("media_type", identity.media_type)
+                
+                # Now try Anilist/Provider again with the Gemini-corrected identity
+                if identity.media_type == "anime":
+                    provider_result = self.fetch_anilist_metadata(identity.title)
+                    if provider_result:
+                        provider_result["_provider"] = "anilist"
+
+        if provider_result:
+            has_art = bool(provider_result.get("image_url"))
+            result = MetadataResult(
+                identity=identity,
+                anilist_id=provider_result.get("anilistId"),
+                confidence=0.85,
+                recognition_method="provider",
+                verification_status="verified",
+                provider=provider_result.get("_provider", "unknown"),
+                resolved_at=time.time(),
+                image_url=provider_result.get("image_url"),
+                genres=provider_result.get("genres", []),
+                rating=provider_result.get("rating"),
+                synopsis=provider_result.get("plot") or provider_result.get("description"),
+            )
+            self._cache_store(identity, result, file_path)
+            if not has_art:
+                self._emit_diagnostic("artwork_failure", {"title": identity.title})
+            self._emit_diagnostic("resolved", {"title": identity.title, "provider": result.provider})
+            return result
+        else:
+            dedup_key = self._normalize_cache_key(identity.title, identity.season, identity.episode, identity.media_type)
+            self._set_negative_cache(dedup_key)
+            self._emit_diagnostic("provider_failure", {"title": identity.title})
+            self._emit_diagnostic("unresolved", {"title": identity.title})
+            return MetadataResult(
+                identity=identity,
+                confidence=0.0,
+                recognition_method="unresolved",
+                verification_status="unresolved",
+                resolved_at=time.time()
+            )
+
     def _normalize_cache_key(title: str, season: Optional[int] = None, episode: Optional[int] = None, media_type: str = "") -> str:
         """Build a normalized, path-independent cache key from media identity.
         A renamed/moved file with the same title+episode still resolves to the
@@ -489,108 +768,79 @@ class MetadataEngine:
     @staticmethod
     def parse_filename(title: str) -> MediaIdentity:
         """Parse a raw filename into structured media identity data."""
+        original_filename = title
         title = str(title or "")
+        
+        # Remove file extension and leading numbers (like "01. ")
         title = re.sub(r'^\d+[\.\-]\s+', '', title)
         title = re.sub(r'\.(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
         title = re.sub(r'\s+(mp4|mkv|avi|flv|wmv|mov|webm|m4v|mpg|mpeg|ts|flac|mp3|wav|ogg|aac|m4a)$', '', title, flags=re.I).strip()
         
-        def _bracket_to_subtitle(m):
-            c = m.group(1).strip()
-            if ' ' not in c and "'" not in c and re.match(r'^[\w\-\.]+$', c):
-                return m.group(0)
-            return ': ' + c
-        title = re.sub(r'\[([^\]]+)\]', _bracket_to_subtitle, title)
+        # Remove fansub brackets like [SubsPlease] or [1080p] or (1080p)
+        title = re.sub(r'\[.*?\]', '', title).strip()
+        title = re.sub(r'\(.*?\)', '', title).strip()
 
-        title = re.sub(r'([a-z])([A-Z])', r'\1 \2', title)
-        title = title.replace(';', ':')
+        season = None
+        episode = None
 
-        def _smart_cap(w):
-            if not w: return w
-            if w.isupper() and len(w) <= 5: return w
-            def cap_part(p):
-                if not p: return p
-                if any(c.isupper() for c in p[1:]): return p
-                return p.capitalize()
-            return '-'.join(cap_part(p) for p in w.split('-'))
+        # Match "Season 3 Episode 10" or "Season 3 Ep 10" or "S3 E10" or "S03E10"
+        match_s_e = re.search(r'\b(?:S|Season)\s*(\d+)\s*(?:E|Ep|Episode)\s*(\d+)\b', title, re.I)
+        if match_s_e:
+            season = int(match_s_e.group(1))
+            episode = int(match_s_e.group(2))
+            title = title[:match_s_e.start()] + title[match_s_e.end():]
+        else:
+            # Match "Episode 10" or "E10" or "Ep 10"
+            match_e = re.search(r'\b(?:E|Ep|Episode)\s*(\d+)\b', title, re.I)
+            if match_e:
+                episode = int(match_e.group(1))
+                title = title[:match_e.start()] + title[match_e.end():]
+            else:
+                # Match strict trailing episode number like " - 12" or " 12"
+                match_trailing_num = re.search(r'(?: - |\s+)(\d{1,4})$', title)
+                if match_trailing_num:
+                    episode = int(match_trailing_num.group(1))
+                    title = title[:match_trailing_num.start()]
 
-        def _apply_smart_cap(t):
-            if not t: return t
-            return ' '.join(_smart_cap(w) for w in str(t).split())
+        title = title.replace('_', ' ').replace('.', ' ').strip()
+        title = re.sub(r'\s+', ' ', title).strip()
+        title = re.sub(r'\s+\-$', '', title).strip()
 
-        result = {
-            "title": title,
-            "base_title": "",
-            "season": None,
-            "episode": None,
-            "media_type": ""
-        }
-
-        loose_ep = re.search(r"(?<!\d)([A-Za-z][\w\s\.'\.\-:&!,]+?)[\s\._]+(?:Episode|Ep|E)?\s*(\d{1,4})(?:v\d+)?\s*$", title, re.I)
-        explicit_ep = re.search(r'\b(?:Episode|Ep|E)\s*\d{1,4}\s*$', title, re.I)
-        
-        raw_title_for_guessit = title
-        if loose_ep:
-            ep_num = int(loose_ep.group(2))
-            if explicit_ep or not (1900 <= ep_num <= 2099):
-                raw_title = re.sub(r'[\._ ]+', ' ', loose_ep.group(1)).strip()
-                raw_title = re.sub(r'[\s\-]+$', '', raw_title).strip()
-                result["episode"] = ep_num
-                raw_title_for_guessit = raw_title
-
-        try:
-            import guessit
-            guessed = guessit.guessit(raw_title_for_guessit)
-            cleaned = guessed.get('title', raw_title_for_guessit)
-            media_type = guessed.get('type', '')
-
-            if media_type == 'movie':
-                year = guessed.get('year')
-                if year:
-                    cleaned = f"{cleaned} ({year})"
-            
-            release_group = guessed.get('release_group')
-            if release_group and isinstance(release_group, str):
-                rg = release_group.strip()
-                if ("'" in rg or " " in rg) and len(rg) > 3 and cleaned and rg.lower() not in cleaned.lower():
-                    cleaned = cleaned + ": " + rg
-                    
-            cleaned = _apply_smart_cap(cleaned)
-            
-            season = guessed.get('season')
-            episode = guessed.get('episode')
-            
-            if isinstance(season, list): season = season[0]
-            if isinstance(episode, list): episode = episode[0]
-            
-            result["title"] = cleaned
-            if season: result["season"] = season
-            
-            if episode is not None:
-                if result["episode"] is not None:
-                    if str(season) + str(episode) == str(result["episode"]):
-                        result["season"] = None
-                    else:
-                        result["episode"] = episode
+        # Detect trailing roman numerals for season (e.g., "Overlord II")
+        match_roman = re.search(r'\b(I|II|III|IV|V|VI|VII|VIII|IX|X)$', title)
+        if match_roman and season is None:
+            rom_val = {'I': 1, 'V': 5, 'X': 10}
+            s = match_roman.group(1).upper()
+            int_val = 0
+            for i in range(len(s)):
+                if i > 0 and rom_val[s[i]] > rom_val[s[i - 1]]:
+                    int_val += rom_val[s[i]] - 2 * rom_val[s[i - 1]]
                 else:
-                    result["episode"] = episode
-                    
-            result["media_type"] = media_type if media_type else ""
-        except Exception as e:
-            pass
-            
+                    int_val += rom_val[s[i]]
+            season = int_val
+
+        # Detect trailing "Season X" if episode was matched elsewhere
+        match_trailing_season = re.search(r'\b(?:Season|S)\s*(\d+)$', title, re.I)
+        if match_trailing_season and season is None:
+            season = int(match_trailing_season.group(1))
+            title = title[:match_trailing_season.start()].strip()
+
+        # Final cleanup
+        title = re.sub(r'\s+', ' ', title).strip()
+        
         return MediaIdentity(
-            title=result.get("title", title),
-            base_title=result.get("base_title", ""),
-            season=result.get("season"),
-            episode=result.get("episode"),
-            media_type=result.get("media_type", ""),
-            filename=title
+            title=title,
+            base_title=title,
+            season=season,
+            episode=episode,
+            media_type="",
+            filename=original_filename
         )
 
     def query_gemini(self, filename: str, api_key: str) -> Optional[dict]:
         """Use Gemini REST API to get the exact official anime/media title and episode."""
         if not api_key: return None
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         
         prompt = f"""
 You are an expert media metadata resolver with internet knowledge.

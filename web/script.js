@@ -17,10 +17,24 @@ function formatTime(seconds) {
 
 const COVER_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22180%22 height=%22180%22 viewBox=%220 0 180 180%22%3E%3Crect fill=%22%2322222a%22 width=%22180%22 height=%22180%22/%3E%3Cpath d=%22M50 56h80v68H50z%22 fill=%22%2330303a%22/%3E%3Cpath d=%22M58 70h64M58 86h64M58 102h42%22 stroke=%22%235b6070%22 stroke-width=%228%22 stroke-linecap=%22round%22/%3E%3C/svg%3E';
 
+window.getSafeCover = function(url) {
+    if (!url || typeof url !== 'string' || url.trim() === '') return COVER_PLACEHOLDER;
+    // Strip Discord proxy wrapping if present to avoid 401/408 errors outside the client
+    if (url.includes('media.discordapp.net/external/') || url.includes('images-ext-1.discordapp.net/external/')) {
+        try {
+            const parts = url.split('/https/');
+            if (parts.length > 1) {
+                return 'https://' + parts[1];
+            }
+        } catch(e) {}
+    }
+    return url;
+};
+
 window.handleImageError = function(img, fallbackUrl) {
     if (img.dataset.fallbackTried === "true") return;
     img.dataset.fallbackTried = "true";
-    img.src = fallbackUrl || COVER_PLACEHOLDER;
+    img.src = window.getSafeCover(fallbackUrl) || COVER_PLACEHOLDER;
 };
 
 function parseMarkdown(text) {
@@ -84,7 +98,7 @@ window.updateState = function(state) {
         // Cover image hierarchy: scene snapshot -> metadata.image_url -> metadata.image_data_uri -> VLC embedded art -> placeholder
         const coverEl = document.getElementById('hero-cover');
         const snapshotUrl = state.scene_snapshot_data_uri || state.scene_snapshot_url || '';
-        const onlineImgUrl = (state.metadata && (state.metadata.image_url || state.metadata.image_data_uri)) || '';
+        const onlineImgUrl = window.getSafeCover((state.metadata && (state.metadata.image_url || state.metadata.image_data_uri)) || '');
         const localImgUrl = state.local_arturl || '';
         const imgUrl = snapshotUrl || onlineImgUrl || localImgUrl || '';
 
@@ -1178,7 +1192,7 @@ window.renderLibrary = function() {
     grid.innerHTML = displayList.map(m => {
         const title = m.title || m.filename;
         const sub = m.is_group ? `${m.count} Episodes` : (m.episode ? `Episode ${m.episode}` : (m.media_type === 'music' ? 'Music' : 'Video'));
-        const poster = m.cover_url || COVER_PLACEHOLDER;
+        const poster = window.getSafeCover(m.cover_url);
         const progressPct = m.watch_progress && m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
         
         let clickAction = m.is_group ? `window.showEpisodeModal('${m.groupKey.replace(/'/g, "\\'")}')` : `playMedia(${m.id})`;
@@ -1256,7 +1270,7 @@ window.renderContinueWatching = function() {
     rail.innerHTML = uniqueCw.map(m => {
         const title = m.title || m.filename;
         const sub = m.episode ? `Ep ${m.episode}` : '';
-        const poster = m.cover_url || COVER_PLACEHOLDER;
+        const poster = window.getSafeCover(m.cover_url);
         const progressPct = m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
         
         return `
@@ -1720,7 +1734,7 @@ async function refreshDashboardData(force = false) {
         rail.innerHTML = unique.map(item => `
             <div class="history-card" onclick="document.querySelector('[data-tab=\'tab-library\']').click()">
                 <div class="history-cover">
-                    <img src="${item.cover_url || COVER_PLACEHOLDER}" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
+                    <img src="${itewindow.getSafeCover(m.cover_url)}" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
                 </div>
                 <div class="history-info">
                     <div class="history-title" title="${item.title}">${item.cleaned_title || item.title}</div>
@@ -1764,7 +1778,7 @@ async function refreshDashboardData(force = false) {
             return `
             <div class="history-card">
                 <div class="history-cover">
-                    <img src="${item.coverImage.medium || COVER_PLACEHOLDER}" onerror="this.src='${COVER_PLACEHOLDER}'">
+                    <img src="${window.getSafeCover(item.coverImage.medium)}" onerror="this.src='${COVER_PLACEHOLDER}'">
                     <div class="history-progress">
                         <div class="progress-fill" style="width: 100%; background: var(--accent-blurple)"></div>
                     </div>
