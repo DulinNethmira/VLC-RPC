@@ -1,6 +1,7 @@
 import urllib.request
 import json
 import os
+import urllib.error
 
 token = os.environ.get("GITHUB_TOKEN")
 if not token:

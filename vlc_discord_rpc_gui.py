@@ -680,6 +680,7 @@ class DiagnosticsManager:
                 '''
                 headers = {'Authorization': 'Bearer ' + self.backend_ref.config.get("anilist_token")}
                 import requests
+                headers["User-Agent"] = "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"
                 r = requests.post("https://graphql.anilist.co", json={'query': query}, headers=headers, timeout=5)
                 if r.status_code == 200:
                     self.set_state("anilist", "HEALTHY", "Self-test: API auth successful", is_success=True)
@@ -1383,7 +1384,7 @@ class RPCBackend:
 
 
 
-    def add_to_history(self, title, episode_str, is_music, duration):
+    def add_to_history(self, title, episode_str, is_music, duration, cover_url=""):
 
 
         if duration < 10: return
@@ -1398,10 +1399,10 @@ class RPCBackend:
             c = conn.cursor()
 
 
-            c.execute("INSERT INTO history (title, episode_str, is_music, watch_duration, timestamp) VALUES (?, ?, ?, ?, ?)",
+            c.execute("INSERT INTO history (title, episode_str, is_music, watch_duration, timestamp, cover_url) VALUES (?, ?, ?, ?, ?, ?)",
 
 
-                      (title, episode_str, is_music, int(duration), datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                      (title, episode_str, is_music, int(duration), datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), cover_url))
 
 
             conn.commit()
@@ -2307,6 +2308,7 @@ class RPCBackend:
             query = '{ Viewer { statistics { anime { episodesWatched minutesWatched meanScore statuses { status count } } } } }'
 
 
+            headers["User-Agent"] = "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"
             r = requests.post('https://graphql.anilist.co', json={'query': query}, headers=headers, timeout=10)
 
 
@@ -2508,6 +2510,7 @@ class RPCBackend:
             query = '{ Viewer { name statistics { anime { episodesWatched minutesWatched meanScore statuses { status count } } } } }'
 
 
+            headers["User-Agent"] = "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"
             r = requests.post('https://graphql.anilist.co', json={'query': query}, headers=headers, timeout=10)
 
 
@@ -4411,6 +4414,14 @@ class RPCBackend:
                 
                 if result.image_url:
                     self.artwork_engine.resolve_artwork_bg(input_uri, {}, result.image_url)
+                else:
+                    # Fallback to local library or history
+                    if hasattr(self, "web_api") and hasattr(self.web_api, "_get_cached_cover_for_title"):
+                        fallback_cover = self.web_api._get_cached_cover_for_title(cleaned_title)
+                        if fallback_cover:
+                            self.artwork_engine.resolve_artwork_bg(input_uri, {}, fallback_cover)
+                            self.last_watched_cover = fallback_cover
+                            self.log(f"[Metadata] Using fallback cover for '{cleaned_title}'")
                 
                 self.state_data["status_message"] = "Metadata loaded successfully."
                 
@@ -4424,7 +4435,15 @@ class RPCBackend:
             else:
                 self.state_data["status_message"] = "Metadata unresolved."
                 self.log(f"[Metadata] NO Cover found for '{cleaned_title}'")
-
+                
+                # Fallback to local library or history even if completely unresolved
+                if hasattr(self, "web_api") and hasattr(self.web_api, "_get_cached_cover_for_title"):
+                    fallback_cover = self.web_api._get_cached_cover_for_title(cleaned_title)
+                    if fallback_cover:
+                        self.artwork_engine.resolve_artwork_bg(input_uri, {}, fallback_cover)
+                        self.last_watched_cover = fallback_cover
+                        self.log(f"[Metadata] Using fallback cover for '{cleaned_title}'")
+                        
         try:
             self.metadata_engine.resolve_async(
                 file_path=input_uri,
@@ -6000,17 +6019,26 @@ class RPCBackend:
         token = self.config.get("anilist_token", "").strip()
         if not token:
             return {"error": "Not authenticated"}
+        userName = getattr(self, 'fetch_anilist_username', lambda: None)()
+        if not userName:
+            return {"error": "Not authenticated"}
             
         query = """
-        query {
-          Page(page: 1, perPage: 15) {
-            airingSchedules(notYetAired: true, sort: TIME) {
-              airingAt
-              episode
-              media {
-                title { romaji english }
-                coverImage { medium }
-                isAdult
+        query($userName: String) {
+          MediaListCollection(userName: $userName, type: ANIME, status: CURRENT) {
+            lists {
+              entries {
+                media {
+                  id
+                  title { romaji english }
+                  coverImage { medium }
+                  isAdult
+                  nextAiringEpisode {
+                    episode
+                    airingAt
+                    timeUntilAiring
+                  }
+                }
               }
             }
           }
@@ -6020,26 +6048,37 @@ class RPCBackend:
         try:
             r = requests.post(
                 "https://graphql.anilist.co",
-                json={"query": query},
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"query": query, "variables": {"userName": userName}},
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"},
                 timeout=5
             )
             if r.status_code == 200:
                 data = r.json()
-                items = data.get("data", {}).get("Page", {}).get("airingSchedules", [])
+                lists = data.get("data", {}).get("MediaListCollection", {}).get("lists", [])
                 results = []
-                for item in items:
-                    media = item.get("media")
-                    if media and not media.get("isAdult"):
-                        results.append({
-                            "title": media.get("title"),
-                            "coverImage": media.get("coverImage"),
-                            "nextAiringEpisode": {
-                                "episode": item.get("episode"),
-                                "airingAt": item.get("airingAt"),
-                                "timeUntilAiring": item.get("airingAt") - int(time.time())
-                            }
-                        })
+                seen_media_ids = set()
+                for lst in lists:
+                    for entry in lst.get("entries", []):
+                        media = entry.get("media")
+                        if media and not media.get("isAdult") and media.get("nextAiringEpisode"):
+                            media_id = media.get("id")
+                            if media_id in seen_media_ids:
+                                continue
+                            seen_media_ids.add(media_id)
+                            nex = media["nextAiringEpisode"]
+                            title_obj = media.get("title", {})
+                            results.append({
+                                "title": title_obj,
+                                "coverImage": media.get("coverImage"),
+                                "nextAiringEpisode": {
+                                    "episode": nex.get("episode"),
+                                    "airingAt": nex.get("airingAt"),
+                                    "timeUntilAiring": nex.get("timeUntilAiring")
+                                }
+                            })
+                
+                # Sort by timeUntilAiring
+                results.sort(key=lambda x: x["nextAiringEpisode"]["timeUntilAiring"])
                 self._cached_airing_schedule = {"status": "ok", "items": results}
                 self._cached_airing_time = time.time()
                 return self._cached_airing_schedule
@@ -6090,7 +6129,7 @@ class LocalLibraryScanner(threading.Thread):
         """
         try:
             import requests
-            response = requests.post("https://graphql.anilist.co", json={"query": query, "variables": {"search": title}}, timeout=5)
+            response = requests.post("https://graphql.anilist.co", json={"query": query, "variables": {"search": title}}, headers={"Content-Type": "application/json", "User-Agent": "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"}, timeout=5)
             data = response.json().get("data", {}).get("Page", {}).get("media", [])
             if data:
                 return data[0]["id"], data[0]["coverImage"].get("extraLarge") or data[0]["coverImage"].get("large")

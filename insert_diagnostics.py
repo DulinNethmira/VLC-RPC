@@ -187,7 +187,7 @@ class DiagnosticsManager:
                     }
                 }
                 '''
-                headers = {'Authorization': 'Bearer ' + self.backend_ref.config.get("anilist_token")}
+                headers = {'Authorization': 'Bearer ' + self.backend_ref.config.get("anilist_token"), 'User-Agent': 'VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)'}
                 import requests
                 r = requests.post("https://graphql.anilist.co", json={'query': query}, headers=headers, timeout=5)
                 if r.status_code == 200:

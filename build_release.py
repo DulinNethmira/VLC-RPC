@@ -57,20 +57,17 @@ def main():
 
     print("Uploading to GitHub...")
     repo = "DulinNethmira/VLC-RPC"
-    tag_name = "v6.1.4"
-    release_title = "\u2728 v6.1.4 - Final UI Polish & Bug Fixes v2"
-    release_notes = """### \U0001f680 What's New in v6.1.4!
+    tag_name = "v6.1.7"
+    release_title = "✨ v6.1.6 - History Crash & Cover Cache Fixes"
+    release_notes = """### 🚀 What's New in v6.1.6!
 
-We've polished the new Dashboard to feel exactly like a premium anime streaming site!
+#### 🖼️ UI & Cover Arts
+- **History Covers**: Fixed a bug where cover arts would not load correctly for history items in the "Continue Watching" and "Dashboard" sections. Cover images now properly match against cached metadata identities.
 
-#### 🎨 Dashboard Enhancements
-- **Global Airing Schedule**: The "Airing Soon" tab now uses an advanced global AniList GraphQL query to fetch the worldwide anime airing schedule, rather than just polling your active list.
-- **Card Styling**: Added proper styling, hover animations, and cover-image ratios for the Continue Watching and Airing Soon cards to fix layout squishing.
-- **Cover Image Fallbacks**: Fixed a critical SVG parsing bug that caused missing covers to render as broken image icons instead of the sleek placeholder.
-- **History Data Join**: Fixed an issue where the new Dashboard wasn't joining the local media cache when fetching history, restoring cover art to your recent activity!
+#### 🔧 Bug Fixes
+- **History Crash**: Resolved a critical backend error (`add_to_history() takes 5 positional arguments but 6 were given`) that occurred when stopping playback, ensuring watch times save correctly.
 
-Enjoy the ultimate command center! 🎉
-"""
+Enjoy the update! 🎉"""
 
     try:
         release = get_or_create_release(repo, tag_name, token, name=release_title, body=release_notes)

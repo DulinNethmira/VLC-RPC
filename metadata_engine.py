@@ -129,6 +129,19 @@ class MetadataEngine:
                 migrated = False
                 self.cache = {}
                 for k, v in raw_cache.items():
+                    if k == "__anilist_identity_cache_v1__":
+                        # If it was incorrectly migrated into a MetadataResult, unpack it back into a dict
+                        if "identity" in v and "recognition_method" in v:
+                            # It was corrupted, we can't fully restore it easily if it lost inner dicts, but if it has them, they were stripped.
+                            # Actually, `identity` was the key. Wait, if it was corrupted by the migration, `v` is a dict that looks like MetadataResult.
+                            # The original v was a dictionary of identity_key -> dict. If migration hit it, it thought `__anilist_identity_cache_v1__` was a media entry!
+                            # Wait, the migration took `v` and wrapped it in `MetadataResult.from_dict()` or `MetadataResult(...)`.
+                            # If `v` was `{ "key1": {...}, "key2": {...} }`, `v.get("title")` would be None, so `identity.title`="".
+                            # The inner dict is completely lost in `MetadataResult` because it ignores unknown keys!
+                            pass # We just have to leave it or drop it. But if it's currently a valid dict, we preserve it.
+                        self.cache[k] = v
+                        continue
+                        
                     if "identity" in v and "recognition_method" in v:
                         # Already new format
                         self.cache[k] = MetadataResult.from_dict(v)
@@ -661,7 +674,10 @@ Filename:
             r = requests.post(
                 "https://graphql.anilist.co",
                 json={"query": query, "variables": {"search": title}},
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"
+                },
                 timeout=8
             )
             if r.status_code == 200:

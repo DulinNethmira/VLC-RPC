@@ -17,6 +17,12 @@ function formatTime(seconds) {
 
 const COVER_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22180%22 height=%22180%22 viewBox=%220 0 180 180%22%3E%3Crect fill=%22%2322222a%22 width=%22180%22 height=%22180%22/%3E%3Cpath d=%22M50 56h80v68H50z%22 fill=%22%2330303a%22/%3E%3Cpath d=%22M58 70h64M58 86h64M58 102h42%22 stroke=%22%235b6070%22 stroke-width=%228%22 stroke-linecap=%22round%22/%3E%3C/svg%3E';
 
+window.handleImageError = function(img, fallbackUrl) {
+    if (img.dataset.fallbackTried === "true") return;
+    img.dataset.fallbackTried = "true";
+    img.src = fallbackUrl || COVER_PLACEHOLDER;
+};
+
 function parseMarkdown(text) {
     if (!text) return '';
     let html = text
@@ -239,6 +245,34 @@ function refreshStatus() {
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.force_update();
     }
+}
+
+function forceAnilistSync() {
+    const btn = document.getElementById('btn-force-anilist-sync');
+    if (!btn || !window.pywebview || !window.pywebview.api) return;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
+    btn.style.color = '#f59e0b';
+    btn.style.borderColor = '#f59e0b';
+    Promise.all([
+        window.pywebview.api.sync_discord_widget(),
+        window.pywebview.api.force_update()
+    ]).then(() => {
+        btn.innerHTML = '<i class="fas fa-check"></i> Synced!';
+        btn.style.color = '#22c55e';
+        btn.style.borderColor = '#22c55e';
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Force Sync';
+            btn.style.color = '#3db4f2';
+            btn.style.borderColor = '#3db4f2';
+        }, 2500);
+    }).catch(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Force Sync';
+        btn.style.color = '#3db4f2';
+        btn.style.borderColor = '#3db4f2';
+    });
 }
 
 function startRewatch() {
@@ -1144,7 +1178,7 @@ window.renderLibrary = function() {
     grid.innerHTML = displayList.map(m => {
         const title = m.title || m.filename;
         const sub = m.is_group ? `${m.count} Episodes` : (m.episode ? `Episode ${m.episode}` : (m.media_type === 'music' ? 'Music' : 'Video'));
-        const poster = m.cover_url || 'icon.png';
+        const poster = m.cover_url || COVER_PLACEHOLDER;
         const progressPct = m.watch_progress && m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
         
         let clickAction = m.is_group ? `window.showEpisodeModal('${m.groupKey.replace(/'/g, "\\'")}')` : `playMedia(${m.id})`;
@@ -1152,7 +1186,7 @@ window.renderLibrary = function() {
         return `
             <div class="lib-media-card" onclick="${clickAction}">
                 <div class="lib-media-poster-container">
-                    <img src="${poster}" class="lib-media-poster" onerror="this.src='icon.png'">
+                    <img src="${poster}" class="lib-media-poster" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
                     <div class="lib-media-overlay">
                         <i class="fas fa-${m.is_group ? 'folder-open' : 'play'} lib-media-play-icon"></i>
                     </div>
@@ -1222,7 +1256,7 @@ window.renderContinueWatching = function() {
     rail.innerHTML = uniqueCw.map(m => {
         const title = m.title || m.filename;
         const sub = m.episode ? `Ep ${m.episode}` : '';
-        const poster = m.cover_url || 'icon.png';
+        const poster = m.cover_url || COVER_PLACEHOLDER;
         const progressPct = m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
         
         return `
@@ -1233,7 +1267,7 @@ window.renderContinueWatching = function() {
                     <i class="fas fa-times"></i>
                 </div>
                 <div onclick="playMedia(${m.id})" style="display:flex; cursor:pointer;">
-                    <img src="${poster}" class="lib-continue-poster" onerror="this.src='icon.png'">
+                    <img src="${poster}" class="lib-continue-poster" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
                     <div class="lib-continue-info">
                         <div class="lib-continue-title">${title}</div>
                         <div style="font-size: 0.75rem; color: rgba(255,255,255,0.6); margin-bottom: 4px;">${sub}</div>
@@ -1686,7 +1720,7 @@ async function refreshDashboardData(force = false) {
         rail.innerHTML = unique.map(item => `
             <div class="history-card" onclick="document.querySelector('[data-tab=\'tab-library\']').click()">
                 <div class="history-cover">
-                    <img src="${item.cover_url || COVER_PLACEHOLDER}" onerror="this.src='${COVER_PLACEHOLDER}'">
+                    <img src="${item.cover_url || COVER_PLACEHOLDER}" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
                 </div>
                 <div class="history-info">
                     <div class="history-title" title="${item.title}">${item.cleaned_title || item.title}</div>

@@ -984,9 +984,17 @@ select option {
 }
 .horizontal-rail {
     display: flex;
+    flex-wrap: nowrap;
     gap: var(--space-md);
     overflow-x: auto;
+    overscroll-behavior-x: contain;
     padding-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+}
+
+.horizontal-rail > * {
+    flex: 0 0 auto;
 }
 .quick-actions-grid {
     display: grid;

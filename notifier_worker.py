@@ -254,7 +254,7 @@ class MacOSNotifier:
                     r = requests.post(
                         "https://graphql.anilist.co",
                         json={"query": mutation, "variables": {"mediaId": media_id, "score": score_val}},
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"},
                         timeout=8
                     )
                     if r.status_code == 200:
@@ -333,7 +333,7 @@ class MacOSNotifier:
                             "status": "REPEATING",
                             "repeat": target_repeat
                         }},
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"},
                         timeout=8
                     )
                     if r.status_code == 200:
