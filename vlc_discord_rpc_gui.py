@@ -4456,7 +4456,7 @@ class RPCBackend:
             gemini_key = self.config.get("gemini_api_key", "").strip()
             self.metadata_engine.resolve_async(
                 file_path=input_uri,
-                raw_title=cleaned_title + (f" E{episode_str}" if episode_str and not is_music else ""),
+                raw_title=cleaned_title + (f" - {episode_str}" if episode_str and not is_music else ""),
                 filename=cleaned_title,
                 media_type_hint=media_type_hint,
                 artist=artist,
@@ -4797,7 +4797,17 @@ class RPCBackend:
                     # Instantly parse filename deterministically without blocking
                     identity = self.metadata_engine.parse_filename(raw_name)
                     cleaned_title = identity.title
-                    episode_str = str(identity.episode) if identity.episode else ""
+                    
+                    _season = identity.season
+                    _episode = identity.episode
+                    if _season and _episode:
+                        episode_str = f"Season {_season} Episode {_episode}"
+                    elif _episode:
+                        episode_str = f"Episode {_episode}"
+                    elif _season:
+                        episode_str = f"Season {_season}"
+                    else:
+                        episode_str = ""
                     
                     if not cleaned_title:
                         cleaned_title, episode_str, _ = media_identity_to_display(clean_title(raw_name))
