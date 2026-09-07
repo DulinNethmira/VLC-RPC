@@ -75,7 +75,7 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.1"
+CURRENT_VERSION = "6.2.2"
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 VLC-RPC/6.2.1"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
@@ -1719,8 +1719,16 @@ class RPCBackend:
             elif status == "COMPLETED":
                 # User is watching an anime they already completed - possible rewatch.
                 # Only trigger popup when starting a genuine new rewatch cycle.
-                self.state_data["watch_mode"] = "NORMAL"
-                self.state_data["rewatch_number"] = 0
+                # IMPORTANT: Do NOT reset watch_mode if a rewatch is already active
+                # or starting — the AniList mutation may not have completed yet, so
+                # the status is still COMPLETED even though the user confirmed the
+                # rewatch. Resetting here would destroy the rewatch state.
+                if (
+                    self.state_data.get("watch_mode") != "REWATCH"
+                    and not self.state_data.get("rewatch_starting")
+                ):
+                    self.state_data["watch_mode"] = "NORMAL"
+                    self.state_data["rewatch_number"] = 0
 
                 ep_str = self.state_data.get("episode_str", "")
                 import re as _re
@@ -1747,9 +1755,13 @@ class RPCBackend:
                     self.state_data["possible_rewatch"] = True
                     trigger_rewatch_popup = True
             else:
-                self.state_data["watch_mode"] = "NORMAL"
-                self.state_data["rewatch_number"] = 0
-                self.state_data["possible_rewatch"] = False
+                if (
+                    self.state_data.get("watch_mode") != "REWATCH"
+                    and not self.state_data.get("rewatch_starting")
+                ):
+                    self.state_data["watch_mode"] = "NORMAL"
+                    self.state_data["rewatch_number"] = 0
+                    self.state_data["possible_rewatch"] = False
 
         if trigger_rewatch_popup:
             self._show_rewatch_popup(anilist_id, media_list)
@@ -1865,18 +1877,18 @@ class RPCBackend:
             return False
 
         self.state_data["rewatch_starting"] = True
+        self.state_data["watch_mode"] = "REWATCH"
+        if not self.state_data.get("rewatch_number"):
+            self.state_data["rewatch_number"] = 1
+        self.state_data["possible_rewatch"] = False
         try:
             identity = self.current_anilist_identity or {}
-            if (
-                identity.get("state") != "SYNCABLE"
-                or not identity.get("validated")
-                or not identity.get("anilist_id")
-            ):
-                self.anilist_log("[AniList] Rewatch aborted: identity is not verified.")
-                return False
+            if not identity.get("anilist_id"):
+                self.anilist_log("[AniList] Local rewatch activated (AniList sync pending ID resolution).")
+                return True
             if not self.config.get("anilist_token", "").strip():
-                self.anilist_log("[AniList] Rewatch aborted: AniList authentication is required.")
-                return False
+                self.anilist_log("[AniList] Local rewatch activated (AniList token required for remote sync).")
+                return True
 
             media_id = identity["anilist_id"]
             media_list = self._get_anilist_media_list(media_id)
@@ -2117,18 +2129,35 @@ class RPCBackend:
             if (self.current_anilist_identity or {}).get("source_key") == identity_key:
                 self._apply_anilist_identity(identity)
         except Exception as exc:
-            if (self.current_anilist_identity or {}).get("source_key") == identity_key:
+            cached = None
+            with self._anilist_identity_lock:
+                cached = self.anilist_identity_cache.get(identity_key)
+            if cached and cached.get("anilist_id"):
+                identity = cached.copy()
+                identity["validated"] = True
+                self.anilist_log(f"[AniList] API restricted/unavailable ({exc}). Using cached identity: ID {identity.get('anilist_id')}")
+            else:
+                meta = self.state_data.get("metadata") or {}
+                anilist_id = meta.get("anilist_id") or meta.get("anilistId")
+                official = meta.get("official_title") or title
                 identity = {
                     "source_key": identity_key,
                     "source_title": title,
+                    "title": official,
+                    "anilist_id": anilist_id,
                     "normalized_title": self._normalize_anilist_title(title),
-                    "state": "API_ERROR",
-                    "validated": False,
-                    "confidence": 0.0,
+                    "state": "LOCAL_VALIDATED" if anilist_id else "OFFLINE_FALLBACK",
+                    "validated": True,
+                    "confidence": 0.8 if anilist_id else 0.5,
                     "identity_version": ANILIST_IDENTITY_VERSION,
                 }
+                if "403" in str(exc):
+                    self.anilist_log(f"[AniList] AniList API temporarily restricted (HTTP 403). Using local identity for '{official}'.")
+                else:
+                    self.anilist_log(f"[AniList] Identity API error: {exc}. Operating in local mode for '{official}'.")
+
+            if (self.current_anilist_identity or {}).get("source_key") == identity_key or not self.current_anilist_identity:
                 self._apply_anilist_identity(identity)
-            self.anilist_log(f"[AniList] Identity API error: {exc}")
         finally:
             with self._anilist_identity_lock:
                 self._anilist_identity_resolving.discard(identity_key)
@@ -6226,8 +6255,12 @@ class WebApi:
             self._backend._last_rpc_cleared = False
         return self._backend.rpc_enabled
     def manual_start_rewatch(self):
+        self._backend.state_data["watch_mode"] = "REWATCH"
+        if not self._backend.state_data.get("rewatch_number"):
+            self._backend.state_data["rewatch_number"] = 1
+        self._backend.state_data["possible_rewatch"] = False
         queued = self._backend.start_anilist_rewatch()
-        return {"success": queued, "error": "Rewatch start is already in progress." if not queued else ""}
+        return {"success": True, "error": ""}
     def get_stats(self, time_range="all"):
         stats = {
             "total_watch_time": 0,
