@@ -75,7 +75,8 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.0"
+CURRENT_VERSION = "6.2.1"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 VLC-RPC/6.2.1"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -1634,7 +1635,7 @@ class RPCBackend:
                 r = requests.post(
                     "https://graphql.anilist.co",
                     json={"query": "query { Viewer { name } }"},
-                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
                     timeout=5
                 )
                 if r.status_code == 200:
@@ -1672,6 +1673,7 @@ class RPCBackend:
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
+                "User-Agent": DEFAULT_USER_AGENT,
             },
             timeout=10,
         )
@@ -1920,6 +1922,7 @@ class RPCBackend:
                     "Authorization": f"Bearer {self.config['anilist_token'].strip()}",
                     "Content-Type": "application/json",
                     "Accept": "application/json",
+                    "User-Agent": DEFAULT_USER_AGENT,
                 },
                 timeout=10,
             )
@@ -2036,10 +2039,11 @@ class RPCBackend:
               }
             }
             """
+            search_title = (title or "").replace(';', ':').strip()
             response = requests.post(
                 "https://graphql.anilist.co",
-                json={"query": query, "variables": {"search": title}},
-                headers={"Content-Type": "application/json"},
+                json={"query": query, "variables": {"search": search_title}},
+                headers={"Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
                 timeout=10,
             )
             if response.status_code != 200:
@@ -2238,6 +2242,7 @@ class RPCBackend:
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
                     "Accept": "application/json",
+                    "User-Agent": DEFAULT_USER_AGENT,
                 },
                 timeout=10,
             )
@@ -2713,7 +2718,7 @@ class RPCBackend:
                 json={"query": "query { Viewer { mediaListOptions { scoreFormat } } }"},
 
 
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
 
 
                 timeout=8
@@ -4039,7 +4044,7 @@ class RPCBackend:
                 json={"query": "query { Viewer { name } }"},
 
 
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
 
 
                 timeout=8
@@ -4371,6 +4376,7 @@ class RPCBackend:
             response = requests.post(
                 'https://graphql.anilist.co',
                 json={'query': query, 'variables': {'id': anilist_id}},
+                headers={'Content-Type': 'application/json', 'User-Agent': DEFAULT_USER_AGENT},
                 timeout=5
             )
             if response.status_code == 200:
@@ -4861,7 +4867,11 @@ class RPCBackend:
                     self.state_data["is_music"] = is_music
 
 
-                    self.state_data["cleaned_title"] = cleaned_title
+                    meta_official = (self.state_data.get("metadata") or {}).get("official_title") or (self.current_anilist_identity or {}).get("title")
+                    if meta_official and isinstance(meta_official, str) and meta_official.strip():
+                        self.state_data["cleaned_title"] = meta_official.strip()
+                    else:
+                        self.state_data["cleaned_title"] = cleaned_title
 
 
                     # CRITICAL: update episode_str every poll cycle so check_auto_sync always has it
@@ -5929,7 +5939,7 @@ class RPCBackend:
             r = requests.post(
                 "https://graphql.anilist.co",
                 json={"query": query, "variables": {"userName": userName}},
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"},
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
                 timeout=5
             )
             if r.status_code == 200:
@@ -6009,7 +6019,7 @@ class LocalLibraryScanner(threading.Thread):
         """
         try:
             import requests
-            response = requests.post("https://graphql.anilist.co", json={"query": query, "variables": {"search": title}}, headers={"Content-Type": "application/json", "User-Agent": "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"}, timeout=5)
+            response = requests.post("https://graphql.anilist.co", json={"query": query, "variables": {"search": title}}, headers={"Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT}, timeout=5)
             data = response.json().get("data", {}).get("Page", {}).get("media", [])
             if data:
                 return data[0]["id"], data[0]["coverImage"].get("extraLarge") or data[0]["coverImage"].get("large")

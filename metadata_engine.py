@@ -45,6 +45,7 @@ class MetadataResult:
     rating: Optional[float] = None
     synopsis: Optional[str] = None
     dominant_color: Optional[str] = None
+    official_title: Optional[str] = None
 
     def to_dict(self):
         return {
@@ -69,7 +70,8 @@ class MetadataResult:
             "genres": self.genres,
             "rating": self.rating,
             "synopsis": self.synopsis,
-            "dominant_color": self.dominant_color
+            "dominant_color": self.dominant_color,
+            "official_title": self.official_title
         }
 
     @classmethod
@@ -98,7 +100,8 @@ class MetadataResult:
             genres=data.get("genres", []),
             rating=data.get("rating"),
             synopsis=data.get("synopsis"),
-            dominant_color=data.get("dominant_color")
+            dominant_color=data.get("dominant_color"),
+            official_title=data.get("official_title")
         )
 
 class MetadataEngine:
@@ -477,6 +480,7 @@ class MetadataEngine:
                 genres=provider_result.get("genres", []),
                 rating=provider_result.get("rating"),
                 synopsis=provider_result.get("plot") or provider_result.get("description"),
+                official_title=provider_result.get("official_title"),
             )
             self._cache_store(identity, result, file_path)
             if not has_art:
@@ -533,7 +537,7 @@ class MetadataEngine:
                     episode = int(match_trailing_num.group(1))
                     title = title[:match_trailing_num.start()]
 
-        title = title.replace('_', ' ').replace('.', ' ').strip()
+        title = title.replace('_', ' ').replace('.', ' ').replace(';', ':').strip()
         title = re.sub(r'\s+', ' ', title).strip()
         title = re.sub(r'\s+\-$', '', title).strip()
 
