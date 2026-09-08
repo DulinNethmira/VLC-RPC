@@ -254,7 +254,14 @@ class MacOSNotifier:
                     r = requests.post(
                         "https://graphql.anilist.co",
                         json={"query": mutation, "variables": {"mediaId": media_id, "score": score_val}},
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"},
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.6",
+                            "Origin": "https://anilist.co",
+                            "Referer": "https://anilist.co/"
+                        },
                         timeout=8
                     )
                     if r.status_code == 200:
@@ -333,7 +340,14 @@ class MacOSNotifier:
                             "status": "REPEATING",
                             "repeat": target_repeat
                         }},
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"},
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.6",
+                            "Origin": "https://anilist.co",
+                            "Referer": "https://anilist.co/"
+                        },
                         timeout=8
                     )
                     if r.status_code == 200:

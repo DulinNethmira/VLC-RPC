@@ -75,8 +75,22 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.5"
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 VLC-RPC/6.2.5"
+CURRENT_VERSION = "6.2.6"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.6"
+ANILIST_COMMON_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": DEFAULT_USER_AGENT,
+    "Origin": "https://anilist.co",
+    "Referer": "https://anilist.co/",
+}
+
+def get_anilist_headers(token=None):
+    h = dict(ANILIST_COMMON_HEADERS)
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -679,9 +693,8 @@ class DiagnosticsManager:
                     }
                 }
                 '''
-                headers = {'Authorization': 'Bearer ' + self.backend_ref.config.get("anilist_token")}
+                headers = get_anilist_headers(self.backend_ref.config.get("anilist_token"))
                 import requests
-                headers["User-Agent"] = "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"
                 r = requests.post("https://graphql.anilist.co", json={'query': query}, headers=headers, timeout=5)
                 if r.status_code == 200:
                     self.set_state("anilist", "HEALTHY", "Self-test: API auth successful", is_success=True)
@@ -1700,7 +1713,7 @@ class RPCBackend:
                 r = requests.post(
                     "https://graphql.anilist.co",
                     json={"query": "query { Viewer { name } }"},
-                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
+                    headers=get_anilist_headers(token),
                     timeout=5
                 )
                 if r.status_code == 200:
@@ -1734,12 +1747,7 @@ class RPCBackend:
         response = requests.post(
             "https://graphql.anilist.co",
             json={"query": query, "variables": variables},
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": DEFAULT_USER_AGENT,
-            },
+            headers=get_anilist_headers(token),
             timeout=10,
         )
         if response.status_code == 401:
@@ -2002,12 +2010,7 @@ class RPCBackend:
                     "status": "REPEATING",
                     "repeat": target_repeat,
                 }},
-                headers={
-                    "Authorization": f"Bearer {self.config['anilist_token'].strip()}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": DEFAULT_USER_AGENT,
-                },
+                headers=get_anilist_headers(self.config['anilist_token'].strip()),
                 timeout=10,
             )
             payload = response.json()
@@ -2127,7 +2130,7 @@ class RPCBackend:
             response = requests.post(
                 "https://graphql.anilist.co",
                 json={"query": query, "variables": {"search": search_title}},
-                headers={"Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
+                headers=get_anilist_headers(),
                 timeout=10,
             )
             if response.status_code != 200:
@@ -2339,12 +2342,7 @@ class RPCBackend:
             response = requests.post(
                 "https://graphql.anilist.co",
                 json={"query": mutation, "variables": variables},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": DEFAULT_USER_AGENT,
-                },
+                headers=get_anilist_headers(token),
                 timeout=10,
             )
             if response.status_code == 401:
@@ -2421,7 +2419,7 @@ class RPCBackend:
             query = '{ Viewer { statistics { anime { episodesWatched minutesWatched meanScore statuses { status count } } } } }'
 
 
-            headers["User-Agent"] = "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"
+            headers = get_anilist_headers(token)
             r = requests.post('https://graphql.anilist.co', json={'query': query}, headers=headers, timeout=10)
 
 
@@ -2617,13 +2615,12 @@ class RPCBackend:
             # 1. Fetch AniList Stats
 
 
-            headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json', 'Accept': 'application/json'}
+            headers = get_anilist_headers(token)
 
 
             query = '{ Viewer { name statistics { anime { episodesWatched minutesWatched meanScore statuses { status count } } } } }'
 
 
-            headers["User-Agent"] = "VLC-RPC/6.1.8 (Windows NT 10.0; Win64; x64)"
             r = requests.post('https://graphql.anilist.co', json={'query': query}, headers=headers, timeout=10)
 
 
@@ -2819,7 +2816,7 @@ class RPCBackend:
                 json={"query": "query { Viewer { mediaListOptions { scoreFormat } } }"},
 
 
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
+                headers=get_anilist_headers(token),
 
 
                 timeout=8
@@ -4145,7 +4142,7 @@ class RPCBackend:
                 json={"query": "query { Viewer { name } }"},
 
 
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
+                headers=get_anilist_headers(token),
 
 
                 timeout=8
@@ -4477,7 +4474,7 @@ class RPCBackend:
             response = requests.post(
                 'https://graphql.anilist.co',
                 json={'query': query, 'variables': {'id': anilist_id}},
-                headers={'Content-Type': 'application/json', 'User-Agent': DEFAULT_USER_AGENT},
+                headers=get_anilist_headers(),
                 timeout=5
             )
             if response.status_code == 200:
@@ -6040,7 +6037,7 @@ class RPCBackend:
             r = requests.post(
                 "https://graphql.anilist.co",
                 json={"query": query, "variables": {"userName": userName}},
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT},
+                headers=get_anilist_headers(token),
                 timeout=5
             )
             if r.status_code == 200:
@@ -6120,7 +6117,7 @@ class LocalLibraryScanner(threading.Thread):
         """
         try:
             import requests
-            response = requests.post("https://graphql.anilist.co", json={"query": query, "variables": {"search": title}}, headers={"Content-Type": "application/json", "User-Agent": DEFAULT_USER_AGENT}, timeout=5)
+            response = requests.post("https://graphql.anilist.co", json={"query": query, "variables": {"search": title}}, headers=get_anilist_headers(), timeout=5)
             data = response.json().get("data", {}).get("Page", {}).get("media", [])
             if data:
                 return data[0]["id"], data[0]["coverImage"].get("extraLarge") or data[0]["coverImage"].get("large")
