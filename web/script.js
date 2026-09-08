@@ -1742,7 +1742,7 @@ async function refreshDashboardData(force = false) {
         rail.innerHTML = unique.map(item => `
             <div class="history-card" onclick="document.querySelector('[data-tab=\'tab-library\']').click()">
                 <div class="history-cover">
-                    <img src="${itewindow.getSafeCover(m.cover_url)}" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
+                    <img src="${window.getSafeCover(m.cover_url)}" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
                 </div>
                 <div class="history-info">
                     <div class="history-title" title="${item.title}">${item.cleaned_title || item.title}</div>

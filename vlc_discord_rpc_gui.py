@@ -75,8 +75,8 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.6"
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.6"
+CURRENT_VERSION = "6.2.7"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.7"
 ANILIST_COMMON_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
@@ -1287,6 +1287,7 @@ class RPCBackend:
 
 
                 download_url = data.get("html_url", "")
+                checksum_url = ""
 
 
                 for asset in data.get("assets", []):
@@ -1301,7 +1302,10 @@ class RPCBackend:
                         download_url = asset.get("browser_download_url", download_url)
 
 
-                        break
+                    elif name.endswith(".sha256"):
+
+
+                        checksum_url = asset.get("browser_download_url", checksum_url)
 
 
 
@@ -1329,6 +1333,9 @@ class RPCBackend:
 
 
                 self.state_data["update_download_url"] = download_url
+
+
+                self.state_data["update_checksum_url"] = checksum_url
 
 
                 self.state_data["update_changelog"] = changelog
@@ -1850,8 +1857,8 @@ class RPCBackend:
         repeat = (media_list or {}).get("repeat") or 0
         token = self.config.get("anilist_token", "").strip()
 
-        # Deduplicate: only prompt once per AniList ID per session
-        rewatch_key = (anilist_id, "rewatch_prompt")
+        # Deduplicate: only prompt once per AniList ID per session per repeat cycle
+        rewatch_key = (anilist_id, "rewatch_prompt", repeat)
         if rewatch_key in self.scored_episodes:
             return
         self.scored_episodes.add(rewatch_key)
@@ -5047,6 +5054,11 @@ class RPCBackend:
                         else:
                             ep_suffix = f" — Episode {episode_str}" if episode_str and not is_music else ""
                             self.notify("media_detection", "Media Detected", f"{cleaned_title}{ep_suffix}", priority=NotificationPriority.NORMAL, icon="info")
+                            
+                            # CRITICAL: Reset rewatch state for new series/movies to prevent state leaking
+                            self.state_data["watch_mode"] = "NORMAL"
+                            self.state_data["rewatch_number"] = 0
+                            self.state_data["possible_rewatch"] = False
 
                         self.last_watched_title_raw = self.state_data['title']
                         self.last_watched_title = cleaned_title
@@ -6512,17 +6524,20 @@ class WebApi:
                         return (0,)
                 if _parse(latest_tag) > _parse(CURRENT_VERSION):
                     download_url = ""
+                    checksum_url = ""
                     for asset in data.get("assets", []):
                         name = asset.get("name", "").lower()
                         if name.endswith(".exe") and "setup" in name:
                             download_url = asset.get("browser_download_url", "")
-                            break
+                        elif name.endswith(".sha256"):
+                            checksum_url = asset.get("browser_download_url", "")
                     changelog = data.get("body", "").strip()
                     if len(changelog) > 400:
                         changelog = changelog[:397] + "..."
                     self._backend.state_data["update_available"] = True
                     self._backend.state_data["update_version"] = latest_tag
                     self._backend.state_data["update_download_url"] = download_url
+                    self._backend.state_data["update_checksum_url"] = checksum_url
                     self._backend.state_data["update_changelog"] = changelog
                     show_toast("Update Available", f"v{latest_tag} is available! Click Update in the app.")
                     return {
@@ -6540,6 +6555,50 @@ class WebApi:
             future = executor.submit(_check)
             res = future.result()
         return res
+    def verify_update_installer(self, file_path, expected_hash):
+        import os
+        if not expected_hash or len(expected_hash) != 64:
+            return False, "Invalid or missing expected SHA-256 hash."
+        if not os.path.exists(file_path):
+            return False, "Installer file not found."
+        if os.path.getsize(file_path) == 0:
+            return False, "Installer file is empty."
+        if not file_path.lower().endswith(".exe"):
+            return False, "Installer is not an executable (.exe)."
+        
+        try:
+            with open(file_path, "rb") as f:
+                header = f.read(2)
+                if header != b"MZ":
+                    return False, "Installer lacks MZ executable header."
+        except Exception as e:
+            return False, f"Failed to read installer header: {e}"
+        
+        import hashlib
+        sha256 = hashlib.sha256()
+        try:
+            with open(file_path, "rb") as f:
+                for block in iter(lambda: f.read(65536), b""):
+                    sha256.update(block)
+        except Exception as e:
+            return False, f"Failed to read installer for hashing: {e}"
+            
+        file_hash = sha256.hexdigest().lower()
+        if file_hash != expected_hash.lower():
+            return False, f"SHA-256 hash mismatch. Expected {expected_hash}, got {file_hash}."
+            
+        import subprocess
+        try:
+            res = subprocess.run(["powershell.exe", "-NoProfile", "-Command", f"(Get-AuthenticodeSignature -FilePath '{file_path}').Status"], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            status = res.stdout.strip()
+            self._backend.log(f"Updater Authenticode check: {status}")
+            if status not in ["Valid", "NotSigned"]:
+                return False, f"Invalid Authenticode signature: {status}"
+        except Exception as e:
+            self._backend.log(f"Failed to check Authenticode: {e}")
+            
+        return True, "Verified successfully."
+
     def trigger_download_update(self):
         """Download the update installer in a background thread."""
         download_url = self._backend.state_data.get("update_download_url")
@@ -6551,25 +6610,35 @@ class WebApi:
 
         def _download_worker():
             import tempfile
+            import re
+            import os
+            tmp_path = None
             try:
                 self._backend.state_data["update_status"] = "downloading"
                 self._backend.state_data["update_progress"] = 0
 
-                headers = {
-                    "User-Agent": f"VLC-RPC/{CURRENT_VERSION}",
-                    "Accept": "application/octet-stream",
-                }
+                checksum_url = self._backend.state_data.get("update_checksum_url")
+                if not checksum_url:
+                    raise Exception("No checksum URL found. Update rejected.")
+                
+                headers = {"User-Agent": f"VLC-RPC/{CURRENT_VERSION}"}
+                chk_resp = requests.get(checksum_url, headers=headers, timeout=15)
+                chk_resp.raise_for_status()
+                chk_text = chk_resp.text.strip()
+                match = re.search(r'\b([a-fA-F0-9]{64})\b', chk_text)
+                if not match:
+                    raise Exception("Failed to parse valid SHA-256 checksum from asset.")
+                self._backend.state_data["update_expected_sha256"] = match.group(1).lower()
+
+                headers["Accept"] = "application/octet-stream"
                 resp = requests.get(download_url, headers=headers, stream=True, timeout=60)
                 resp.raise_for_status()
 
                 total = int(resp.headers.get("content-length", 0))
-                # Save to temp directory with .exe extension
-                update_version = self._backend.state_data.get("update_version", "update")
-                tmp_dir = tempfile.gettempdir()
-                tmp_path = os.path.join(tmp_dir, f"VLC_RPC_Setup_v{update_version}.exe")
-
+                tmp_fd, tmp_path = tempfile.mkstemp(suffix=".exe", prefix="VLC_RPC_Setup_")
+                
                 downloaded = 0
-                with open(tmp_path, "wb") as f:
+                with os.fdopen(tmp_fd, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=65536):
                         if chunk:
                             f.write(chunk)
@@ -6582,17 +6651,34 @@ class WebApi:
                 self._backend.state_data["update_status"] = "ready"
                 self._backend.log(f"Update downloaded to: {tmp_path}")
             except Exception as exc:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
                 self._backend.state_data["update_status"] = "error"
                 self._backend.state_data["update_progress"] = 0
                 self._backend.log(f"Update download failed: {exc}")
 
         threading.Thread(target=_download_worker, daemon=True).start()
         return {"success": True}
+
     def install_update(self):
         """Launch the downloaded silent installer and kill this app."""
         temp_exe = self._backend.state_data.get("update_temp_exe")
         if not temp_exe or not os.path.exists(temp_exe):
             return {"success": False, "error": "Update file not found."}
+            
+        expected_hash = self._backend.state_data.get("update_expected_sha256")
+        is_valid, err_msg = self.verify_update_installer(temp_exe, expected_hash)
+        if not is_valid:
+            try:
+                os.remove(temp_exe)
+            except Exception:
+                pass
+            self._backend.state_data["update_temp_exe"] = None
+            return {"success": False, "error": f"Security verification failed: {err_msg}"}
+
         import subprocess
         try:
             subprocess.Popen([temp_exe, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/FORCECLOSEAPPLICATIONS"], 
