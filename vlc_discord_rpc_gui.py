@@ -75,8 +75,8 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.4"
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 VLC-RPC/6.2.4"
+CURRENT_VERSION = "6.2.5"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 VLC-RPC/6.2.5"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -1601,19 +1601,39 @@ class RPCBackend:
         return max(0, min(score, 100)), reason
 
 
-    def persist_rewatch_state(self, anilist_id, watch_mode, rewatch_number):
-        if not anilist_id:
+    def persist_rewatch_state(self, key_or_id, watch_mode, rewatch_number):
+        if not key_or_id:
+            identity = self.state_data.get("anilist_identity") or {}
+            key_or_id = identity.get("anilist_id") or identity.get("source_key") or identity.get("normalized_title") or self.state_data.get("title")
+        if not key_or_id:
             return
-        str_id = str(anilist_id)
-        if (
-            str_id not in self.local_rewatch_cache
-            or self.local_rewatch_cache[str_id].get("watch_mode") != watch_mode
-            or self.local_rewatch_cache[str_id].get("rewatch_number") != rewatch_number
-        ):
-            self.local_rewatch_cache[str_id] = {
-                "watch_mode": watch_mode,
-                "rewatch_number": rewatch_number
-            }
+
+        keys = [str(key_or_id)]
+        identity = self.state_data.get("anilist_identity") or {}
+        if identity.get("anilist_id"):
+            keys.append(str(identity["anilist_id"]))
+        if identity.get("source_key"):
+            keys.append(str(identity["source_key"]))
+        if identity.get("normalized_title"):
+            keys.append(str(identity["normalized_title"]))
+        if self.state_data.get("title"):
+            keys.append(str(self.state_data["title"]))
+            keys.append(self._normalize_anilist_title(self.state_data["title"]))
+
+        changed = False
+        for k in set(keys):
+            if k:
+                if (
+                    k not in self.local_rewatch_cache
+                    or self.local_rewatch_cache[k].get("watch_mode") != watch_mode
+                    or self.local_rewatch_cache[k].get("rewatch_number") != rewatch_number
+                ):
+                    self.local_rewatch_cache[k] = {
+                        "watch_mode": watch_mode,
+                        "rewatch_number": rewatch_number
+                    }
+                    changed = True
+        if changed:
             self.metadata_cache["__rewatch_cache_v1__"] = self.local_rewatch_cache
             self.save_metadata_cache()
 
@@ -1622,11 +1642,23 @@ class RPCBackend:
         self.state_data["anilist_identity"] = identity.copy()
         self.state_data["anilist_identity_state"] = identity.get("state", "UNKNOWN")
 
+        candidate_keys = []
         if identity.get("anilist_id"):
-            cached_rewatch = self.local_rewatch_cache.get(str(identity["anilist_id"]))
+            candidate_keys.append(str(identity["anilist_id"]))
+        if identity.get("source_key"):
+            candidate_keys.append(str(identity["source_key"]))
+        if identity.get("normalized_title"):
+            candidate_keys.append(str(identity["normalized_title"]))
+        if identity.get("title"):
+            candidate_keys.append(str(identity["title"]))
+            candidate_keys.append(self._normalize_anilist_title(identity["title"]))
+
+        for k in candidate_keys:
+            cached_rewatch = self.local_rewatch_cache.get(k)
             if cached_rewatch and cached_rewatch.get("watch_mode") == "REWATCH":
                 self.state_data["watch_mode"] = "REWATCH"
                 self.state_data["rewatch_number"] = cached_rewatch.get("rewatch_number") or 1
+                break
 
 
         # Retain the full provider metadata object. Only enrich its canonical ID
@@ -6300,9 +6332,9 @@ class WebApi:
             self._backend.state_data["rewatch_number"] = 1
         self._backend.state_data["possible_rewatch"] = False
         
-        anilist_id = self._backend.state_data.get("anilist_identity", {}).get("anilist_id")
-        if anilist_id:
-            self._backend.persist_rewatch_state(anilist_id, "REWATCH", self._backend.state_data["rewatch_number"])
+        identity = self._backend.state_data.get("anilist_identity") or {}
+        key_or_id = identity.get("anilist_id") or identity.get("source_key") or identity.get("normalized_title") or self._backend.state_data.get("title")
+        self._backend.persist_rewatch_state(key_or_id, "REWATCH", self._backend.state_data["rewatch_number"])
             
         queued = self._backend.start_anilist_rewatch()
         return {"success": True, "error": ""}
