@@ -971,8 +971,16 @@ select option {
     flex-direction: column;
     gap: var(--space-xl);
 }
+.tab-content {
+    flex: 1;
+    overflow-y: auto;
+    position: relative;
+    min-width: 0;
+}
+
 .dashboard-section {
     padding: var(--space-lg);
+    min-width: 0;
 }
 .dashboard-section h3 {
     margin-top: 0;
@@ -984,9 +992,17 @@ select option {
 }
 .horizontal-rail {
     display: flex;
+    flex-wrap: nowrap;
     gap: var(--space-md);
     overflow-x: auto;
+    overscroll-behavior-x: contain;
     padding-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+}
+
+.horizontal-rail > * {
+    flex: 0 0 auto;
 }
 .quick-actions-grid {
     display: grid;
@@ -1055,6 +1071,7 @@ select option {
 .history-card, .airing-card {
     display: flex;
     flex-direction: column;
+    flex-shrink: 0;
     min-width: 140px;
     max-width: 160px;
     background: rgba(0,0,0,0.2);

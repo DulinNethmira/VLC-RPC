@@ -17,6 +17,26 @@ function formatTime(seconds) {
 
 const COVER_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22180%22 height=%22180%22 viewBox=%220 0 180 180%22%3E%3Crect fill=%22%2322222a%22 width=%22180%22 height=%22180%22/%3E%3Cpath d=%22M50 56h80v68H50z%22 fill=%22%2330303a%22/%3E%3Cpath d=%22M58 70h64M58 86h64M58 102h42%22 stroke=%22%235b6070%22 stroke-width=%228%22 stroke-linecap=%22round%22/%3E%3C/svg%3E';
 
+window.getSafeCover = function(url) {
+    if (!url || typeof url !== 'string' || url.trim() === '') return COVER_PLACEHOLDER;
+    // Strip Discord proxy wrapping if present to avoid 401/408 errors outside the client
+    if (url.includes('media.discordapp.net/external/') || url.includes('images-ext-1.discordapp.net/external/')) {
+        try {
+            const parts = url.split('/https/');
+            if (parts.length > 1) {
+                return 'https://' + parts[1];
+            }
+        } catch(e) {}
+    }
+    return url;
+};
+
+window.handleImageError = function(img, fallbackUrl) {
+    if (img.dataset.fallbackTried === "true") return;
+    img.dataset.fallbackTried = "true";
+    img.src = window.getSafeCover(fallbackUrl) || COVER_PLACEHOLDER;
+};
+
 function parseMarkdown(text) {
     if (!text) return '';
     let html = text
@@ -78,7 +98,7 @@ window.updateState = function(state) {
         // Cover image hierarchy: scene snapshot -> metadata.image_url -> metadata.image_data_uri -> VLC embedded art -> placeholder
         const coverEl = document.getElementById('hero-cover');
         const snapshotUrl = state.scene_snapshot_data_uri || state.scene_snapshot_url || '';
-        const onlineImgUrl = (state.metadata && (state.metadata.image_url || state.metadata.image_data_uri)) || '';
+        const onlineImgUrl = window.getSafeCover((state.metadata && (state.metadata.image_url || state.metadata.image_data_uri)) || '');
         const localImgUrl = state.local_arturl || '';
         const imgUrl = snapshotUrl || onlineImgUrl || localImgUrl || '';
 
@@ -239,6 +259,34 @@ function refreshStatus() {
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.force_update();
     }
+}
+
+function forceAnilistSync() {
+    const btn = document.getElementById('btn-force-anilist-sync');
+    if (!btn || !window.pywebview || !window.pywebview.api) return;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
+    btn.style.color = '#f59e0b';
+    btn.style.borderColor = '#f59e0b';
+    Promise.all([
+        window.pywebview.api.sync_discord_widget(),
+        window.pywebview.api.force_update()
+    ]).then(() => {
+        btn.innerHTML = '<i class="fas fa-check"></i> Synced!';
+        btn.style.color = '#22c55e';
+        btn.style.borderColor = '#22c55e';
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Force Sync';
+            btn.style.color = '#3db4f2';
+            btn.style.borderColor = '#3db4f2';
+        }, 2500);
+    }).catch(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Force Sync';
+        btn.style.color = '#3db4f2';
+        btn.style.borderColor = '#3db4f2';
+    });
 }
 
 function startRewatch() {
@@ -474,6 +522,7 @@ function initPyWebview() {
                 if (changelogBox) changelogBox.innerHTML = parseMarkdown(state.update_changelog || 'See GitHub for details.');
                 if (btnVer) btnVer.textContent = state.update_version;
                 if (dlBtn) {
+                    dlBtn.innerHTML = '<i class="fas fa-download"></i> Download & Install Update';
                     dlBtn.onclick = () => {
                         dlBtn.disabled = true;
                         dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
@@ -509,8 +558,13 @@ function initPyWebview() {
                 if (dlBtn && dlBtn.dataset.error !== "true") {
                     dlBtn.dataset.error = "true";
                     dlBtn.disabled = false;
-                    dlBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Download Failed (Try Browser)';
-                    dlBtn.onclick = () => window.open(state.update_download_url, '_blank');
+                    dlBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Download Failed — Click to Retry';
+                    dlBtn.onclick = () => {
+                        dlBtn.dataset.error = "";
+                        dlBtn.disabled = true;
+                        dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Retrying...';
+                        window.pywebview.api.trigger_download_update();
+                    };
                 }
             }
         }).catch(err => console.error("Error fetching state:", err));
@@ -756,8 +810,10 @@ function checkUpdates() {
                 dlBtn.style.background = "";
                 dlBtn.style.borderColor = "";
                 dlBtn.style.color = "";
-                dlBtn.innerHTML = '<i class="fas fa-download"></i> Download Update (Opens Browser)';
+                dlBtn.innerHTML = '<i class="fas fa-download"></i> Download & Install Update';
                 dlBtn.onclick = () => {
+                    dlBtn.disabled = true;
+                    dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
                     window.pywebview.api.trigger_download_update();
                 };
             }
@@ -1144,7 +1200,7 @@ window.renderLibrary = function() {
     grid.innerHTML = displayList.map(m => {
         const title = m.title || m.filename;
         const sub = m.is_group ? `${m.count} Episodes` : (m.episode ? `Episode ${m.episode}` : (m.media_type === 'music' ? 'Music' : 'Video'));
-        const poster = m.cover_url || 'icon.png';
+        const poster = window.getSafeCover(m.cover_url);
         const progressPct = m.watch_progress && m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
         
         let clickAction = m.is_group ? `window.showEpisodeModal('${m.groupKey.replace(/'/g, "\\'")}')` : `playMedia(${m.id})`;
@@ -1152,7 +1208,7 @@ window.renderLibrary = function() {
         return `
             <div class="lib-media-card" onclick="${clickAction}">
                 <div class="lib-media-poster-container">
-                    <img src="${poster}" class="lib-media-poster" onerror="this.src='icon.png'">
+                    <img src="${poster}" class="lib-media-poster" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
                     <div class="lib-media-overlay">
                         <i class="fas fa-${m.is_group ? 'folder-open' : 'play'} lib-media-play-icon"></i>
                     </div>
@@ -1222,7 +1278,7 @@ window.renderContinueWatching = function() {
     rail.innerHTML = uniqueCw.map(m => {
         const title = m.title || m.filename;
         const sub = m.episode ? `Ep ${m.episode}` : '';
-        const poster = m.cover_url || 'icon.png';
+        const poster = window.getSafeCover(m.cover_url);
         const progressPct = m.duration ? Math.min(100, (m.watch_progress / m.duration) * 100) : 0;
         
         return `
@@ -1233,7 +1289,7 @@ window.renderContinueWatching = function() {
                     <i class="fas fa-times"></i>
                 </div>
                 <div onclick="playMedia(${m.id})" style="display:flex; cursor:pointer;">
-                    <img src="${poster}" class="lib-continue-poster" onerror="this.src='icon.png'">
+                    <img src="${poster}" class="lib-continue-poster" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
                     <div class="lib-continue-info">
                         <div class="lib-continue-title">${title}</div>
                         <div style="font-size: 0.75rem; color: rgba(255,255,255,0.6); margin-bottom: 4px;">${sub}</div>
@@ -1686,7 +1742,7 @@ async function refreshDashboardData(force = false) {
         rail.innerHTML = unique.map(item => `
             <div class="history-card" onclick="document.querySelector('[data-tab=\'tab-library\']').click()">
                 <div class="history-cover">
-                    <img src="${item.cover_url || COVER_PLACEHOLDER}" onerror="this.src='${COVER_PLACEHOLDER}'">
+                    <img src="${window.getSafeCover(m.cover_url)}" onerror="handleImageError(this, '${COVER_PLACEHOLDER}')">
                 </div>
                 <div class="history-info">
                     <div class="history-title" title="${item.title}">${item.cleaned_title || item.title}</div>
@@ -1730,13 +1786,13 @@ async function refreshDashboardData(force = false) {
             return `
             <div class="history-card">
                 <div class="history-cover">
-                    <img src="${item.coverImage.medium || COVER_PLACEHOLDER}" onerror="this.src='${COVER_PLACEHOLDER}'">
+                    <img src="${window.getSafeCover(item.coverImage.medium)}" onerror="this.src='${COVER_PLACEHOLDER}'">
                     <div class="history-progress">
                         <div class="progress-fill" style="width: 100%; background: var(--accent-blurple)"></div>
                     </div>
                 </div>
                 <div class="history-info">
-                    <div class="history-title" title="${item.title.romaji}">${item.title.romaji}</div>
+                    <div class="history-title" title="${item.title.english || item.title.romaji}">${item.title.english || item.title.romaji}</div>
                     <div class="history-meta" style="color:var(--accent-blurple);">Ep ${item.nextAiringEpisode.episode} • ${timeStr}</div>
                 </div>
             </div>

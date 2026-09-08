@@ -1,7 +1,8 @@
-../../include/site/python3.10/greenlet/greenlet.h,sha256=goR9ZprGoq71mBRhzBuexFvTNryvf4uceMHMIaSxh3o,4919
+../../Include/greenlet/greenlet.h,sha256=goR9ZprGoq71mBRhzBuexFvTNryvf4uceMHMIaSxh3o,4919
 greenlet-3.5.1.dist-info/INSTALLER,sha256=zuuue4knoyJ-UwPPXg8fezS7VCrXJQrAP7zeNuwvFQg,4
 greenlet-3.5.1.dist-info/METADATA,sha256=pdKAobY6lKaAuD5S1nVCRP52-nRlKaooHdOruQ3Ng7c,3881
 greenlet-3.5.1.dist-info/RECORD,,
+greenlet-3.5.1.dist-info/REQUESTED,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
 greenlet-3.5.1.dist-info/WHEEL,sha256=iPjZCrxu1cE-Y3uyjjPaXg-jNuvTXT9YfQfIwfucHF4,101
 greenlet-3.5.1.dist-info/licenses/LICENSE,sha256=q5d7ZUYFZwMZUJSB7OSRmPQFoSk3KsOMlvUc2WwvRS4,1464
 greenlet-3.5.1.dist-info/licenses/LICENSE.PSF,sha256=ae-micx67Hc2I20wOcHWZeSwxzSlv-pav2MwI6uy__Q,2471
