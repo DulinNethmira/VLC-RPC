@@ -75,8 +75,8 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.2"
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 VLC-RPC/6.2.1"
+CURRENT_VERSION = "6.2.3"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 VLC-RPC/6.2.3"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -861,6 +861,9 @@ class RPCBackend:
 
 
             "update_changelog": "",
+            "update_status": "",
+            "update_progress": 0,
+            "update_temp_exe": "",
 
 
             "scene_snapshot_url": "",
@@ -950,6 +953,8 @@ class RPCBackend:
 
 
             self.anilist_identity_cache = cached_identities
+
+        self.local_rewatch_cache = self.metadata_cache.get("__rewatch_cache_v1__", {})
 
 
         
@@ -1596,10 +1601,32 @@ class RPCBackend:
         return max(0, min(score, 100)), reason
 
 
+    def persist_rewatch_state(self, anilist_id, watch_mode, rewatch_number):
+        if not anilist_id:
+            return
+        str_id = str(anilist_id)
+        if (
+            str_id not in self.local_rewatch_cache
+            or self.local_rewatch_cache[str_id].get("watch_mode") != watch_mode
+            or self.local_rewatch_cache[str_id].get("rewatch_number") != rewatch_number
+        ):
+            self.local_rewatch_cache[str_id] = {
+                "watch_mode": watch_mode,
+                "rewatch_number": rewatch_number
+            }
+            self.metadata_cache["__rewatch_cache_v1__"] = self.local_rewatch_cache
+            self.save_metadata_cache()
+
     def _apply_anilist_identity(self, identity):
         self.current_anilist_identity = identity
         self.state_data["anilist_identity"] = identity.copy()
         self.state_data["anilist_identity_state"] = identity.get("state", "UNKNOWN")
+
+        if identity.get("anilist_id"):
+            cached_rewatch = self.local_rewatch_cache.get(str(identity["anilist_id"]))
+            if cached_rewatch and cached_rewatch.get("watch_mode") == "REWATCH":
+                self.state_data["watch_mode"] = "REWATCH"
+                self.state_data["rewatch_number"] = cached_rewatch.get("rewatch_number") or 1
 
 
         # Retain the full provider metadata object. Only enrich its canonical ID
@@ -1615,10 +1642,16 @@ class RPCBackend:
             if identity.get("episodes"):
                 metadata["total_episodes"] = identity["episodes"]
 
+        # Trigger a media list refresh for any validated identity with an
+        # anilist_id. Previously this was gated on state == "SYNCABLE", but
+        # LOCAL_VALIDATED / OFFLINE_FALLBACK identities (created when the
+        # search API returns 403) also carry a valid anilist_id from metadata.
+        # The media list endpoint (user's own list) is a different API call
+        # that often succeeds even when the search endpoint is rate-limited.
         if (
-            identity.get("state") == "SYNCABLE"
-            and identity.get("validated")
+            identity.get("validated")
             and identity.get("anilist_id")
+            and identity.get("state") in ("SYNCABLE", "LOCAL_VALIDATED")
         ):
             self.refresh_anilist_media_list(identity["anilist_id"])
 
@@ -1715,6 +1748,7 @@ class RPCBackend:
                     self.notify("rewatch", "Rewatch Detected", f"Rewatch #{repeat_num} detected", priority=NotificationPriority.NORMAL, icon="info")
                 self.state_data["watch_mode"] = "REWATCH"
                 self.state_data["rewatch_number"] = (media_list or {}).get("repeat") or 1
+                self.persist_rewatch_state(anilist_id, "REWATCH", self.state_data["rewatch_number"])
                 self.state_data["possible_rewatch"] = False
             elif status == "COMPLETED":
                 # User is watching an anime they already completed - possible rewatch.
@@ -1762,6 +1796,7 @@ class RPCBackend:
                     self.state_data["watch_mode"] = "NORMAL"
                     self.state_data["rewatch_number"] = 0
                     self.state_data["possible_rewatch"] = False
+                    self.persist_rewatch_state(anilist_id, "NORMAL", 0)
 
         if trigger_rewatch_popup:
             self._show_rewatch_popup(anilist_id, media_list)
@@ -1881,6 +1916,11 @@ class RPCBackend:
         if not self.state_data.get("rewatch_number"):
             self.state_data["rewatch_number"] = 1
         self.state_data["possible_rewatch"] = False
+
+        anilist_id = self.state_data.get("anilist_identity", {}).get("anilist_id")
+        if anilist_id:
+            self.persist_rewatch_state(anilist_id, "REWATCH", self.state_data["rewatch_number"])
+
         try:
             identity = self.current_anilist_identity or {}
             if not identity.get("anilist_id"):
@@ -6259,6 +6299,11 @@ class WebApi:
         if not self._backend.state_data.get("rewatch_number"):
             self._backend.state_data["rewatch_number"] = 1
         self._backend.state_data["possible_rewatch"] = False
+        
+        anilist_id = self._backend.state_data.get("anilist_identity", {}).get("anilist_id")
+        if anilist_id:
+            self._backend.persist_rewatch_state(anilist_id, "REWATCH", self._backend.state_data["rewatch_number"])
+            
         queued = self._backend.start_anilist_rewatch()
         return {"success": True, "error": ""}
     def get_stats(self, time_range="all"):
@@ -6467,12 +6512,52 @@ class WebApi:
             res = future.result()
         return res
     def trigger_download_update(self):
-        """Start downloading the update in a background thread."""
+        """Download the update installer in a background thread."""
         download_url = self._backend.state_data.get("update_download_url")
         if not download_url:
             return {"success": False, "error": "No download URL found."}
-        import webbrowser
-        webbrowser.open(download_url)
+        # Don't start another download if one is already in progress
+        if self._backend.state_data.get("update_status") == "downloading":
+            return {"success": False, "error": "Download already in progress."}
+
+        def _download_worker():
+            import tempfile
+            try:
+                self._backend.state_data["update_status"] = "downloading"
+                self._backend.state_data["update_progress"] = 0
+
+                headers = {
+                    "User-Agent": f"VLC-RPC/{CURRENT_VERSION}",
+                    "Accept": "application/octet-stream",
+                }
+                resp = requests.get(download_url, headers=headers, stream=True, timeout=60)
+                resp.raise_for_status()
+
+                total = int(resp.headers.get("content-length", 0))
+                # Save to temp directory with .exe extension
+                update_version = self._backend.state_data.get("update_version", "update")
+                tmp_dir = tempfile.gettempdir()
+                tmp_path = os.path.join(tmp_dir, f"VLC_RPC_Setup_v{update_version}.exe")
+
+                downloaded = 0
+                with open(tmp_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total > 0:
+                                self._backend.state_data["update_progress"] = min(int(downloaded * 100 / total), 100)
+
+                self._backend.state_data["update_temp_exe"] = tmp_path
+                self._backend.state_data["update_progress"] = 100
+                self._backend.state_data["update_status"] = "ready"
+                self._backend.log(f"Update downloaded to: {tmp_path}")
+            except Exception as exc:
+                self._backend.state_data["update_status"] = "error"
+                self._backend.state_data["update_progress"] = 0
+                self._backend.log(f"Update download failed: {exc}")
+
+        threading.Thread(target=_download_worker, daemon=True).start()
         return {"success": True}
     def install_update(self):
         """Launch the downloaded silent installer and kill this app."""

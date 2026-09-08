@@ -522,6 +522,7 @@ function initPyWebview() {
                 if (changelogBox) changelogBox.innerHTML = parseMarkdown(state.update_changelog || 'See GitHub for details.');
                 if (btnVer) btnVer.textContent = state.update_version;
                 if (dlBtn) {
+                    dlBtn.innerHTML = '<i class="fas fa-download"></i> Download & Install Update';
                     dlBtn.onclick = () => {
                         dlBtn.disabled = true;
                         dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
@@ -557,8 +558,13 @@ function initPyWebview() {
                 if (dlBtn && dlBtn.dataset.error !== "true") {
                     dlBtn.dataset.error = "true";
                     dlBtn.disabled = false;
-                    dlBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Download Failed (Try Browser)';
-                    dlBtn.onclick = () => window.open(state.update_download_url, '_blank');
+                    dlBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Download Failed — Click to Retry';
+                    dlBtn.onclick = () => {
+                        dlBtn.dataset.error = "";
+                        dlBtn.disabled = true;
+                        dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Retrying...';
+                        window.pywebview.api.trigger_download_update();
+                    };
                 }
             }
         }).catch(err => console.error("Error fetching state:", err));
@@ -804,8 +810,10 @@ function checkUpdates() {
                 dlBtn.style.background = "";
                 dlBtn.style.borderColor = "";
                 dlBtn.style.color = "";
-                dlBtn.innerHTML = '<i class="fas fa-download"></i> Download Update (Opens Browser)';
+                dlBtn.innerHTML = '<i class="fas fa-download"></i> Download & Install Update';
                 dlBtn.onclick = () => {
+                    dlBtn.disabled = true;
+                    dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
                     window.pywebview.api.trigger_download_update();
                 };
             }
