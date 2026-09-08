@@ -75,8 +75,8 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.3"
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 VLC-RPC/6.2.3"
+CURRENT_VERSION = "6.2.4"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 VLC-RPC/6.2.4"
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
 ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
@@ -2192,7 +2192,7 @@ class RPCBackend:
                     "identity_version": ANILIST_IDENTITY_VERSION,
                 }
                 if "403" in str(exc):
-                    self.anilist_log(f"[AniList] AniList API temporarily restricted (HTTP 403). Using local identity for '{official}'.")
+                    self.anilist_log(f"[AniList] Notice: AniList upstream API disabled by AniList servers (HTTP 403). Operating in local identity mode for '{official}'.")
                 else:
                     self.anilist_log(f"[AniList] Identity API error: {exc}. Operating in local mode for '{official}'.")
 
