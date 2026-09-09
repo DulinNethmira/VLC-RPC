@@ -26,6 +26,10 @@ def make_backend():
     backend._rewatch_start_lock = threading.Lock()
     backend.logs = []
     backend.anilist_log = backend.logs.append
+    backend.local_rewatch_cache = {}
+    backend.scored_episodes = set()
+    backend.notify = lambda *a, **k: None
+    backend.persist_rewatch_state = lambda *a, **k: None
     backend.save_metadata_cache = lambda: None
     backend.force_sync_widget = lambda: None
     backend.force_sync_widget_v2 = lambda: None

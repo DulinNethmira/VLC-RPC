@@ -1506,7 +1506,8 @@ class RPCBackend:
     def _normalize_anilist_title(value):
         value = unicodedata.normalize("NFKD", str(value or ""))
         value = "".join(ch for ch in value if not unicodedata.combining(ch))
-        return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+        val = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+        return re.sub(r"\bcour\b", "part", val)
 
 
     @staticmethod
@@ -1673,8 +1674,9 @@ class RPCBackend:
             candidate_keys.append(str(identity["title"]))
             candidate_keys.append(self._normalize_anilist_title(identity["title"]))
 
+        rewatch_cache = getattr(self, "local_rewatch_cache", {}) or {}
         for k in candidate_keys:
-            cached_rewatch = self.local_rewatch_cache.get(k)
+            cached_rewatch = rewatch_cache.get(k)
             if cached_rewatch and cached_rewatch.get("watch_mode") == "REWATCH":
                 self.state_data["watch_mode"] = "REWATCH"
                 self.state_data["rewatch_number"] = cached_rewatch.get("rewatch_number") or 1
