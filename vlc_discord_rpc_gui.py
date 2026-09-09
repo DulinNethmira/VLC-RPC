@@ -75,8 +75,8 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.7"
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.7"
+CURRENT_VERSION = "6.2.8"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.8"
 ANILIST_COMMON_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
@@ -1619,7 +1619,7 @@ class RPCBackend:
         if candidate.get("format") == "MOVIE" and "episode" in str(episode_str).lower():
             score -= 60
             reason += ", movie/episode mismatch"
-        return max(0, min(score, 100)), reason
+        return max(0, score), reason
 
 
     def persist_rewatch_state(self, key_or_id, watch_mode, rewatch_number):
