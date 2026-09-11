@@ -75,8 +75,8 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.9"
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.9"
+CURRENT_VERSION = "6.3.0"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.3.0"
 ANILIST_COMMON_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
@@ -93,8 +93,8 @@ def get_anilist_headers(token=None):
 
 UPDATE_CHECK_INTERVAL = 3600 * 6  # 6 hours
 CACHE_FILE = "metadata_cache.json"
-ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v1__"
-ANILIST_IDENTITY_VERSION = 1
+ANILIST_IDENTITY_CACHE_KEY = "__anilist_identity_cache_v2__"
+ANILIST_IDENTITY_VERSION = 2
 METADATA_CACHE_VERSION = 2
 ANILIST_IDENTITY_CONFIDENCE = 95
 HISTORY_FILE = "history.json"
@@ -1713,6 +1713,11 @@ class RPCBackend:
             metadata["anilistId"] = identity["anilist_id"]
             if identity.get("episodes"):
                 metadata["total_episodes"] = identity["episodes"]
+            if identity.get("title"):
+                metadata["official_title"] = identity["title"]
+            if identity.get("cover_url"):
+                metadata["image_url"] = identity["cover_url"]
+                self.state_data["image_url"] = identity["cover_url"]
 
         # Trigger a media list refresh for any validated identity with an
         # anilist_id. Previously this was gated on state == "SYNCABLE", but
@@ -2089,14 +2094,14 @@ class RPCBackend:
         return True
 
 
-    def _legacy_metadata_identity(self, identity_key, title):
+    def _legacy_metadata_identity(self, identity_key, title, episode_str=""):
         """Lazily upgrade only exact-title legacy metadata records.
 
-        Older cache entries lack a confidence marker.  An ID is adopted only if
-        its stored official title is an exact normalized match, never by cache
-        key, containment, or result ordering.
+        Older cache entries lack a confidence marker. An ID is adopted only if
+        its stored official title is an exact normalized match and season numbers agree.
         """
         normalized = self._normalize_anilist_title(title)
+        _, _, requested_season = self._anilist_identity_key(title, episode_str)
         for metadata in self.metadata_cache.values():
             if not isinstance(metadata, dict) or not metadata.get("anilistId"):
                 continue
@@ -2105,6 +2110,14 @@ class RPCBackend:
             )
             if not official or official != normalized:
                 continue
+
+            cand_season = metadata.get("season")
+            if requested_season > 1:
+                if cand_season and cand_season != requested_season:
+                    continue
+                if cand_season is None:
+                    continue
+
             identity = {
                 "anilist_id": metadata["anilistId"],
                 "title": metadata.get("official_title") or title,
@@ -2200,12 +2213,15 @@ class RPCBackend:
             else:
                 score, reason, media = scored[0]
                 titles = media.get("title") or {}
+                cover_data = media.get("coverImage") or {}
+                cover_url = cover_data.get("extraLarge") or cover_data.get("large") or cover_data.get("medium") or ""
                 identity = {
                     "anilist_id": media.get("id"),
                     "title": titles.get("english") or titles.get("romaji") or title,
                     "title_romaji": titles.get("romaji") or "",
                     "title_english": titles.get("english") or "",
                     "title_native": titles.get("native") or "",
+                    "cover_url": cover_url,
                     "format": media.get("format") or "",
                     "season": media.get("season"),
                     "season_year": media.get("seasonYear"),
@@ -2288,7 +2304,7 @@ class RPCBackend:
                 self._apply_anilist_identity(identity)
                 self.anilist_log(f"[AniList] Using cached AniList ID {identity['anilist_id']}.")
                 return
-            legacy_identity = self._legacy_metadata_identity(identity_key, title)
+            legacy_identity = self._legacy_metadata_identity(identity_key, title, episode_str)
             if legacy_identity:
                 self._apply_anilist_identity(legacy_identity)
                 return
