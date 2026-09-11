@@ -75,8 +75,8 @@ def show_toast(title, msg, icon="info"):
     _notifier_client.show_toast(title, msg, icon)
 # Global Config
 CONFIG_FILE = "config.json"
-CURRENT_VERSION = "6.2.8"
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.8"
+CURRENT_VERSION = "6.2.9"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 VLC-RPC/6.2.9"
 ANILIST_COMMON_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
@@ -1562,10 +1562,28 @@ class RPCBackend:
         if not variants:
             return 0, "candidate has no titles"
 
+        full_requested_variants = {requested}
+        if requested_season > 1:
+            raw_spec = f"{requested_title} {episode_str}".lower()
+            if "season" in raw_spec or re.search(r"\bs\d+\b", raw_spec):
+                full_requested_variants.add(
+                    self._normalize_anilist_title(f"{requested_title} season {requested_season}")
+                )
+                full_requested_variants.add(
+                    self._normalize_anilist_title(f"{requested_title} {requested_season}")
+                )
+            if "part" in raw_spec or "cour" in raw_spec:
+                full_requested_variants.add(
+                    self._normalize_anilist_title(f"{requested_title} part {requested_season}")
+                )
+                full_requested_variants.add(
+                    self._normalize_anilist_title(f"{requested_title} cour {requested_season}")
+                )
+
         score = 0
         reason = "titles differ"
         for variant in variants:
-            if variant == requested:
+            if variant in full_requested_variants:
                 score = max(score, 100)
                 reason = "exact title"
             else:
